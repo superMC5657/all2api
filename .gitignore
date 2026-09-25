@@ -2,7 +2,9 @@ node_modules/
 dist/
 config.json
 usage.jsonl
-bridges/
+# bridges/ 下只有 sidecar 数据文件（含凭据）被忽略；二进制入库
+bridges/*
+!bridges/qoder2api.exe
 .env
 .DS_Store
 .zcode/

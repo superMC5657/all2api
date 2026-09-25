@@ -10,6 +10,7 @@
     "decrypt:zcode": "tsx scripts/zcode-decrypt.ts",
     "probe:zcode": "tsx scripts/zcode-probe.ts",
     "decrypt:codebuddy": "tsx scripts/codebuddy-decrypt.ts",
+    "build:sidecar": "cd third_party/qoder2api && go build -o ../../bridges/qoder2api.exe .",
     "test": "tsx scripts/test-translate.ts && tsx scripts/test-codebuddy.ts"
   },
   "dependencies": {

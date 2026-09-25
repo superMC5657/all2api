@@ -69,11 +69,11 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 - 模型列表从网关动态获取（5 分钟缓存），也可在 `config.json` 静态指定；
 - sidecar 自带管理面板 `http://127.0.0.1:10081/admin`（密码在 `bridges/qoder-data.json` 的 `password` 字段），可看额度、订阅周期、用量统计。
 
-> 在 Linux/macOS 上：`cd bridges && go build -o qoder2api .`（源码克隆自上述仓库），并把 `providers.qoder.bridgePath` 改为 `bridges/qoder2api`。Docker 镜像内已自动处理。
+> 在 Linux/macOS 上：sidecar 源码已收进本仓库 `third_party/qoder2api/`（含补丁），运行 `pnpm build:sidecar` 重新编译，并把 `providers.qoder.bridgePath` 改为 `bridges/qoder2api`。Docker 镜像内已自动处理。
 
 ### qoder-intl（海外版适配，已完成）
 
-`bridges/qoder2api.exe` 是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。两个区域可同时运行（不同端口、不同 data.json）：
+`bridges/qoder2api.exe` 是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。补丁后的完整 Go 源码已收进 `third_party/qoder2api/`（上游基点、改动清单、patch 存档见其 `VENDOR.md`），改完源码跑 `pnpm build:sidecar` 即可重新编译。两个区域可同时运行（不同端口、不同 data.json）：
 
 - 国际版端点映射（从海外版 IDE 的端点注册表提取 + 存活探测验证）：Auth/Chat → `center.qoder.sh`，OpenAPI（额度）→ `openapi.qoder.sh`；`/algo/api/v2/*` 路径与国内版同构，签名会话协议一致；
 - **鉴权与国内版不同**：海外版没有 Integrations PAT 交换，all2api 直接解密海外版 IDE 的登录身份（`state.vscdb` 的 `secret://aicoding.auth.userInfo`，Chromium os_crypt `v10`+AES-256-GCM，密钥经 `Local State` 的 DPAPI 解出）并以纯 Bearer + 签名会话直连——**零用户操作**，重启 all2api 时自动重新提取；
@@ -125,7 +125,7 @@ src/
    ├─ zcode/                 # cipher.ts(解密) credentials.ts(读凭据) client.ts(透传)
    └─ qoder/                 # bridge.ts(sidecar 托管) client.ts(代理+翻译)
 scripts/                     # decrypt:zcode / probe:zcode / test-translate
-bridges/                     # qoder2api sidecar 二进制 + 数据(gitignore)
+bridges/                     # qoder2api sidecar 二进制(入库) + 数据文件(凭据, gitignore)
 ```
 
 ## 常见问题
