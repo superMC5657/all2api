@@ -88,7 +88,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 - token 过期自动调 `/v2/plugin/auth/token/refresh` 刷新，并按原格式（明文/信封）原子回写 auth 文件，401 自动重试一次；
 - 上游是标准 OpenAI 协议但**只支持流式**：非流式请求由 all2api 本地聚合 SSE（含 tool_calls 分片拼接与 usage）；
 - 工具调用可用，但网关的 `tool_choice` 只接受字符串，对象形式会自动降级为 `required`（无法指定具体函数）；
-- 模型：`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7`、`kimi-k2.6`、`kimi-k2.5`、`deepseek-v4-pro`、`deepseek-v4-flash`、`minimax-m3-pay`、`hy3-preview-agent`、`auto`（以 `codebuddy/` 前缀使用）。
+- 模型：`glm-5.3-flash`、`glm-5.3-flashx`、`glm-5.3`、`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7/k2.6/k2.5`、`deepseek-v4.1-flash`、`deepseek-v4-pro/flash`、`minimax-m3-pay`、`hy4-preview`、`hy3`、`hy3-preview`、`hy3-preview-agent`、`auto`（以 `codebuddy/` 前缀使用；腾讯网关无模型目录接口，列表为实测维护，新模型按 ID 探测补充）。
 
 验证凭据解密：`pnpm run decrypt:codebuddy`（输出脱敏）。Windows 上 Electron 路径自动从注册表定位（本例 `E:\Program Files\Tencent\WorkBuddy\WorkBuddy.exe`），也可用 `electronPath` 配置或 `WORKBUDDY_ELECTRON_BIN` 环境变量指定。
 
@@ -151,7 +151,7 @@ bridges/                     # qoder2api sidecar 二进制(启动时自动编译
 
 - 新增 `providers/codebuddy/`：凭据读取 + 信封解密（约 100 行，标准 node:crypto，零第三方依赖）+ Electron 密钥提取子进程（按 keyId 缓存）；token 临近过期时 `POST /v2/plugin/auth/token/refresh`（`X-Refresh-Token` 头）并**按原信封格式回写** auth 文件（`sealAuthFieldForTest` 给出了对称的封口实现）；
 - 上游**只支持流式**：非流式请求需本地聚合 SSE（含 tool_calls 分片拼接），Anthropic 兼容复用 `src/translate/anthropic.ts`（同 Qoder 路径）；
-- 模型列表：`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7/k2.6/k2.5`、`deepseek-v4-pro/flash`、`minimax-m3-pay`、`hy3-preview-agent`、`auto`；
+- 模型列表：与上文 codebuddy 一致（见 `src/config.ts` 的 `providers.codebuddy.models`，2026-09-26 逐个实测）。
 - 备选路线（不需要桌面端）：复刻 CLI 的 OAuth 设备授权三步（`plugin/auth/state?platform=CLI` → 浏览器登录 → `plugin/auth/token?state=` 轮询），适合未装桌面端的机器；签到/余额在 `www.codebuddy.cn` 域（`billing/meter/daily-checkin`、`billing/meter/get-user-resource`）。
 
 已知的坑（参考 workbuddy2api 的处理）：

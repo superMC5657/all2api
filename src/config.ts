@@ -83,16 +83,25 @@ const DEFAULTS: All2ApiConfig = {
     codebuddy: {
       enabled: false,
       userAgent: "all2api/0.1",
+      // 2026-09-26 实测网关逐个验证过；腾讯网关无模型目录接口，
+      // 桌面端列表是它自己动态拉的，新模型出现时按 ID 规律探测补充
       models: [
+        "glm-5.3-flash",
+        "glm-5.3-flashx",
+        "glm-5.3",
         "glm-5.2",
         "glm-5.1",
         "glm-5v-turbo",
         "kimi-k2.7",
         "kimi-k2.6",
         "kimi-k2.5",
+        "deepseek-v4.1-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
         "minimax-m3-pay",
+        "hy4-preview",
+        "hy3",
+        "hy3-preview",
         "hy3-preview-agent",
         "auto",
       ],
