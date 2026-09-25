@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import { readQoderIdeIdentity } from "./ide-credentials.js";
 
@@ -33,6 +33,50 @@ interface BridgeDataFile {
   [key: string]: unknown;
 }
 
+/**
+ * The sidecar binary is a build artifact, not source: it must never be
+ * committed. On first start (fresh clone) it is compiled from the vendored
+ * patched source in third_party/qoder2api — see that dir's VENDOR.md.
+ * cn + intl bridges share one binary, so concurrent starts share one build.
+ */
+const sidecarBuilds = new Map<string, Promise<string>>();
+
+async function ensureSidecarBinary(binary: string): Promise<string> {
+  if (existsSync(binary)) return binary;
+  let pending = sidecarBuilds.get(binary);
+  if (!pending) {
+    pending = buildSidecar(binary).finally(() => sidecarBuilds.delete(binary));
+    sidecarBuilds.set(binary, pending);
+  }
+  return pending;
+}
+
+async function buildSidecar(binary: string): Promise<string> {
+  // default layout: <root>/bridges/qoder2api.exe → <root>/third_party/qoder2api
+  const sourceDir = resolve(dirname(binary), "..", "third_party", "qoder2api");
+  if (!existsSync(sourceDir)) {
+    throw new Error(
+      `qoder bridge binary ${binary} not found and vendored sidecar source missing at ${sourceDir} — see third_party/qoder2api/VENDOR.md`,
+    );
+  }
+  console.log(`[qoder-bridge] sidecar binary not found — building from ${sourceDir} ...`);
+  mkdirSync(dirname(binary), { recursive: true });
+  await new Promise<void>((done, fail) => {
+    const go = spawn("go", ["build", "-o", binary, "."], { cwd: sourceDir, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    go.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    go.once("error", (err) =>
+      fail(new Error(`go toolchain unavailable (${err.message}) — install Go ≥1.22, or build manually: pnpm build:sidecar`)),
+    );
+    go.once("exit", (code) =>
+      code === 0 ? done() : fail(new Error(`go build failed (exit ${code}):\n${stderr.slice(-2000)}`)),
+    );
+  });
+  if (!existsSync(binary)) throw new Error("go build reported success but the binary is still missing");
+  console.log(`[qoder-bridge] sidecar built: ${binary}`);
+  return binary;
+}
+
 export async function startBridge(opts: {
   binaryPath: string;
   dataPath: string;
@@ -44,11 +88,7 @@ export async function startBridge(opts: {
   timeoutMs?: number;
 }): Promise<BridgeHandle> {
   const binary = resolve(opts.binaryPath);
-  if (!existsSync(binary)) {
-    throw new Error(
-      `qoder bridge binary not found at ${binary} — build it from Qoder-2API-Go (go build -o bridges/qoder2api.exe .) or download a release`,
-    );
-  }
+  await ensureSidecarBinary(binary);
 
   const apiKey = opts.apiKey || `sk-bridge-${crypto.randomUUID().replaceAll("-", "")}`;
   const dataPath = resolve(opts.dataPath);

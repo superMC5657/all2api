@@ -62,7 +62,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 1. 打开 Qoder → 设置 → **Integrations**，创建一个 Personal Access Token（`pt-` 开头）；
 2. 填入 `config.json` 的 `providers.qoder.pat`，重启 `pnpm start`；
-3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api.exe`，已随项目编译好），把 PAT 注入其 `bridges/qoder-data.json` 并监听 `127.0.0.1:10081`。
+3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api.exe`，首次启动时若不存在会自动从 third_party/qoder2api 源码编译，需本机有 Go ≥1.22），把 PAT 注入其 `bridges/qoder-data.json` 并监听 `127.0.0.1:10081`。
 
 - Qoder 网关的会话机制是 RSA+AES 混合加密 + MD5 签名（约 2900 行 Go 实现），本项目**不重写协议**，而是把成熟的开源实现作为 sidecar 子进程托管，all2api 对其做反向代理；
 - OpenAI 请求原样透传给 sidecar；`/v1/messages` 的 Anthropic 格式由本项目转换层（`src/translate/anthropic.ts`）双向转换：system/多段文本/图片/tool 调用/thinking（reasoning_content）/流式事件全部支持；
@@ -125,7 +125,7 @@ src/
    ├─ zcode/                 # cipher.ts(解密) credentials.ts(读凭据) client.ts(透传)
    └─ qoder/                 # bridge.ts(sidecar 托管) client.ts(代理+翻译)
 scripts/                     # decrypt:zcode / probe:zcode / test-translate
-bridges/                     # qoder2api sidecar 二进制(入库) + 数据文件(凭据, gitignore)
+bridges/                     # qoder2api sidecar 二进制(启动时自动编译,不入库) + 数据文件(凭据, gitignore)
 ```
 
 ## 常见问题
