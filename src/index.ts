@@ -52,12 +52,13 @@ app.use("/v1/*", async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true, providers: providers.map((p) => p.id) }));
 
 app.get("/v1/models", async (c) => {
-  const defaultId = cfg.defaultProvider;
+  // every entry is listed in the canonical "provider/model" form; bare ids
+  // still route to the default provider for backward compatibility
   const data = (
     await Promise.all(
       providers.map(async (p) =>
         (await p.models()).map((id) => ({
-          id: p.id === defaultId ? id : `${p.id}/${id}`,
+          id: `${p.id}/${id}`,
           object: "model",
           owned_by: `all2api:${p.id}`,
         })),

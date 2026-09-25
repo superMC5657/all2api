@@ -104,7 +104,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 | `providers.qoder.pat` | 空 | Qoder PAT |
 | `providers.qoder.bridgePath` | `bridges/qoder2api.exe` | sidecar 二进制路径 |
 
-**模型路由**：不带前缀 → 默认 provider；`qoder/GLM-5.3` 这种 `provider/model` 形式 → 指定 provider。`GET /v1/models` 返回聚合列表（非默认 provider 的模型自动带前缀）。
+**模型路由**：所有模型统一以 `provider/model` 形式展示与调用（如 `zcode/glm-5.3`、`codebuddy/hy4-preview`）；兼容起见，不带前缀的裸名仍会路由到默认 provider，但不再出现在 `/v1/models` 列表中。
 
 ## 用量日志
 
