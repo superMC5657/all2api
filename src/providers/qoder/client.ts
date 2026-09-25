@@ -12,15 +12,19 @@ import type { BridgeHandle } from "./bridge.js";
  *    response (stream or not) is translated back to Anthropic format.
  */
 export class QoderProvider implements ProviderAdapter {
-  readonly id = "qoder";
+  readonly id: string;
   private readonly modelsCacheTtlMs = 5 * 60_000;
   private modelsCache: { at: number; ids: string[] } | null = null;
+  private readonly modelsFallback: string[];
 
   constructor(
-    private readonly config: QoderProviderConfig,
+    config: QoderProviderConfig,
     private readonly bridge: BridgeHandle,
     private readonly timeoutMs: number,
-  ) {}
+  ) {
+    this.id = config.region === "intl" ? "qoder-intl" : "qoder";
+    this.modelsFallback = config.models;
+  }
 
   async models(): Promise<string[]> {
     if (this.modelsCache && Date.now() - this.modelsCache.at < this.modelsCacheTtlMs) {
@@ -42,7 +46,7 @@ export class QoderProvider implements ProviderAdapter {
     } catch {
       // fall back to the static list below
     }
-    return this.config.models;
+    return this.modelsFallback;
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {

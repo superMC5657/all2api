@@ -32,6 +32,8 @@ export async function startBridge(opts: {
   pat?: string;
   port: number;
   apiKey?: string;
+  /** "intl" runs the sidecar against the international (qoder.com) deployment. */
+  region?: "cn" | "intl";
   timeoutMs?: number;
 }): Promise<BridgeHandle> {
   const binary = resolve(opts.binaryPath);
@@ -69,7 +71,13 @@ export async function startBridge(opts: {
 
   const child: ChildProcess = spawn(binary, [], {
     cwd: resolve(dataPath, ".."),
-    env: { ...process.env, QODER_HOST: "127.0.0.1", QODER_PORT: String(opts.port), QODER_DATA_PATH: dataPath },
+    env: {
+      ...process.env,
+      QODER_HOST: "127.0.0.1",
+      QODER_PORT: String(opts.port),
+      QODER_DATA_PATH: dataPath,
+      ...(opts.region === "intl" ? { QODER_REGION: "intl" } : {}),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[qoder-bridge] ${chunk}`));

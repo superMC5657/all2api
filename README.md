@@ -5,7 +5,8 @@
 | Provider | 额度来源 | 凭据获取方式 | 上游协议 | 状态 |
 |---|---|---|---|---|
 | **zcode** | 智谱 GLM Coding Plan（ZCode CLI 登录后的额度） | 自动解密本机 `~/.zcode/v2/credentials.json`（AES-256-GCM，与 ZCode CLI 同源实现） | 原生 Anthropic + 原生 OpenAI（bigmodel coding 端点，纯透传） | ✅ 可用 |
-| **qoder** | Qoder 免费/订阅额度 | Qoder Integrations 页面生成 PAT（`pt-…`） | 经 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) sidecar（OpenAI 格式），Anthropic 由本项目转换层提供 | ✅ 可用（需 PAT） |
+| **qoder** | Qoder 国内版额度（qoder.com.cn） | 国内版 IDE/CLI 的 Integrations PAT（`pt-…`） | 经 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) sidecar（OpenAI 格式），Anthropic 由本项目转换层提供 | ✅ 可用（需 PAT） |
+| **qoder-intl** | Qoder 海外版额度（qoder.com） | 海外版 Access Token（IDE 登录界面/官网获取） | 同一 sidecar，`QODER_REGION=intl` 切到 `center.qoder.sh` | ✅ 已适配（需 Access Token） |
 | **codebuddy** | 腾讯 CodeBuddy/WorkBuddy 免费积分（Free 档 2000 积分/月） | 自动解密本机桌面端凭据（`CodeBuddyExtension/Data/Public/auth/*.info`，支持 5.6.x `$wbEncrypted` 加密信封） | 原生 OpenAI 协议（`copilot.tencent.com`，仅流式，本地聚合） | ✅ 可用（需本机登录桌面端） |
 
 > ⚠️ **风险与边界**：此类用法通常违反各家服务条款，账号可能被限流或封禁。本项目仅供个人在自有账号、自有额度内学习研究使用，**不支持也不提供批量注册、共享、倒卖等玩法**。反代服务持有你的真实凭据，请勿暴露公网（确需暴露请加 HTTPS 反代并修改 `apiKey`）。
@@ -69,6 +70,15 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 - sidecar 自带管理面板 `http://127.0.0.1:10081/admin`（密码在 `bridges/qoder-data.json` 的 `password` 字段），可看额度、订阅周期、用量统计。
 
 > 在 Linux/macOS 上：`cd bridges && go build -o qoder2api .`（源码克隆自上述仓库），并把 `providers.qoder.bridgePath` 改为 `bridges/qoder2api`。Docker 镜像内已自动处理。
+
+### qoder-intl（海外版适配）
+
+`bridges/qoder2api.exe` 是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。两个区域可同时运行（不同端口、不同 data.json）：
+
+- 国际版端点映射（从海外版 IDE 的端点注册表提取 + 存活探测验证）：Auth/Chat → `center.qoder.sh`，OpenAPI（额度）→ `openapi.qoder.sh`；`/algo/api/v3/user/jobToken` 等路径与国内版同构；
+- 海外版的 PAT 等价物叫 **Access Token**：IDE 内 `Ctrl+Shift+P` → 运行 **Qoder: Sign in with Access Token**（命令 `aicoding.login.accesstoken`），登录界面有 Get Access Token 链接指向官网创建页；或到 qoder.com 官网账号设置里找；
+- 拿到 token 后填 `providers.qoderIntl.pat`，重启即可，模型路由前缀为 `qoder-intl/…`；
+- 注意：海外版协议与国内版同族（同一鉴权链 jobToken→securityOauthToken→会话签名），但 token 实测打通仍需你提供一个真实 Access Token。
 
 ### codebuddy（零配置，覆盖 CodeBuddy 与 WorkBuddy）
 

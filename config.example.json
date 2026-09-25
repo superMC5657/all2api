@@ -18,7 +18,17 @@
       "bridgePath": "bridges/qoder2api.exe",
       "bridgePort": 10081,
       "bridgeApiKey": "",
+      "region": "cn",
       "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
+    },
+    "qoderIntl": {
+      "enabled": false,
+      "pat": "",
+      "bridgePath": "bridges/qoder2api.exe",
+      "bridgePort": 10082,
+      "bridgeApiKey": "",
+      "region": "intl",
+      "models": ["qmodel_38max", "qmodel_latest", "dmodel", "kmodel", "mmodel", "gmodel"]
     },
     "codebuddy": {
       "enabled": false,

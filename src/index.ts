@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { loadConfig } from "./config.js";
+import type { QoderProviderConfig } from "./config.js";
 import { forwardCompletion } from "./forward.js";
 import { CodeBuddyProvider } from "./providers/codebuddy/index.js";
 import { startBridge } from "./providers/qoder/bridge.js";
@@ -12,18 +13,23 @@ import { ZCodeProvider } from "./providers/zcode/index.js";
 
 const cfg = loadConfig();
 
+async function startQoder(config: QoderProviderConfig, timeoutMs: number): Promise<QoderProvider> {
+  const region = config.region ?? "cn";
+  const bridge = await startBridge({
+    binaryPath: config.bridgePath,
+    dataPath: `bridges/qoder-${region}.json`,
+    pat: config.pat,
+    port: config.bridgePort,
+    apiKey: config.bridgeApiKey,
+    region,
+  });
+  return new QoderProvider(config, bridge, timeoutMs);
+}
+
 const providers: ProviderAdapter[] = [];
 if (cfg.providers.zcode.enabled) providers.push(new ZCodeProvider(cfg.providers.zcode, cfg.upstreamTimeoutMs));
-if (cfg.providers.qoder.enabled) {
-  const bridge = await startBridge({
-    binaryPath: cfg.providers.qoder.bridgePath,
-    dataPath: "bridges/qoder-data.json",
-    pat: cfg.providers.qoder.pat,
-    port: cfg.providers.qoder.bridgePort,
-    apiKey: cfg.providers.qoder.bridgeApiKey,
-  });
-  providers.push(new QoderProvider(cfg.providers.qoder, bridge, cfg.upstreamTimeoutMs));
-}
+if (cfg.providers.qoder.enabled) providers.push(await startQoder(cfg.providers.qoder, cfg.upstreamTimeoutMs));
+if (cfg.providers.qoderIntl.enabled) providers.push(await startQoder(cfg.providers.qoderIntl, cfg.upstreamTimeoutMs));
 if (cfg.providers.codebuddy.enabled) providers.push(new CodeBuddyProvider(cfg.providers.codebuddy, cfg.upstreamTimeoutMs));
 if (providers.length === 0) {
   console.error("[config] all providers are disabled — enable at least one in config.json");

@@ -20,6 +20,8 @@ export interface QoderProviderConfig {
   bridgePort: number;
   /** Bearer key all2api uses towards the sidecar. */
   bridgeApiKey?: string;
+  /** "cn" (default) = gateway.qoder.com.cn; "intl" = international qoder.com deployment. */
+  region?: "cn" | "intl";
   /** Fallback model ids when the sidecar catalog is unavailable. */
   models: string[];
 }
@@ -44,6 +46,7 @@ export interface All2ApiConfig {
   providers: {
     zcode: ZCodeProviderConfig;
     qoder: QoderProviderConfig;
+    qoderIntl: QoderProviderConfig;
     codebuddy: CodeBuddyProviderConfig;
   };
 }
@@ -67,7 +70,15 @@ const DEFAULTS: All2ApiConfig = {
       enabled: false,
       bridgePath: "bridges/qoder2api.exe",
       bridgePort: 10081,
+      region: "cn",
       models: ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
+    },
+    qoderIntl: {
+      enabled: false,
+      bridgePath: "bridges/qoder2api.exe",
+      bridgePort: 10082,
+      region: "intl",
+      models: ["qmodel_38max", "qmodel_latest", "dmodel", "kmodel", "mmodel", "gmodel"],
     },
     codebuddy: {
       enabled: false,
@@ -109,6 +120,7 @@ export function loadConfig(): All2ApiConfig {
     providers: {
       zcode: { ...DEFAULTS.providers.zcode, ...fileConfig.providers?.zcode },
       qoder: { ...DEFAULTS.providers.qoder, ...fileConfig.providers?.qoder },
+      qoderIntl: { ...DEFAULTS.providers.qoderIntl, ...fileConfig.providers?.qoderIntl },
       codebuddy: { ...DEFAULTS.providers.codebuddy, ...fileConfig.providers?.codebuddy },
     },
   };
