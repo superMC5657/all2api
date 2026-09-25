@@ -64,7 +64,9 @@ const DEFAULTS: All2ApiConfig = {
       enabled: true,
       anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
       openaiBaseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
-      models: ["glm-5.3-flash", "glm-5.3", "glm-5.3-flashx"],
+      // 2026-09-26 用免费 Start Plan key 实测：flash/flashx 放行可用，
+      // glm-5.3 完整版上游无限挂起（付费 key 时代它才可用），故不列入
+      models: ["glm-5.3-flash", "glm-5.3-flashx"],
     },
     qoder: {
       enabled: false,
