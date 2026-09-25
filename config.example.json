@@ -28,7 +28,7 @@
       "bridgePort": 10082,
       "bridgeApiKey": "",
       "region": "intl",
-      "models": ["qmodel_38max", "qmodel_latest", "dmodel", "kmodel", "mmodel", "gmodel"]
+      "models": ["Qwen3.8-Flash", "Qwen3.8-Max"]
     },
     "codebuddy": {
       "enabled": false,

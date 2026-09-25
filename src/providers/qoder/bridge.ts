@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { readQoderIdeIdentity } from "./ide-credentials.js";
+
 /**
  * Manages the Qoder-2API-Go sidecar binary: prepares its data.json (PAT + API key),
  * spawns it, waits for /health, and exposes a base URL for proxying.
@@ -23,6 +25,11 @@ interface BridgeDataFile {
   pat?: string;
   password?: string;
   api_keys?: Array<{ id: string; key: string; note?: string; created_at?: number }>;
+  securityOauthToken?: string;
+  refreshToken?: string;
+  uid?: string;
+  nickname?: string;
+  expireTime?: number;
   [key: string]: unknown;
 }
 
@@ -50,7 +57,7 @@ export async function startBridge(opts: {
   let data: Partial<BridgeDataFile> = {};
   if (existsSync(dataPath)) {
     try {
-      data = JSON.parse(readFileSync(dataPath, "utf8")) as BridgeDataFile;
+      data = JSON.parse(readFileSync(dataPath, "utf8")) as Partial<BridgeDataFile>;
     } catch {
       data = {};
     }
@@ -58,6 +65,20 @@ export async function startBridge(opts: {
   data.host = "127.0.0.1";
   data.port = opts.port;
   if (opts.pat?.trim()) data.pat = opts.pat.trim();
+  if (opts.region === "intl" && !opts.pat?.trim()) {
+    // INTL: no PAT — reuse the desktop IDE's own login identity instead.
+    const ide = readQoderIdeIdentity();
+    if (ide) {
+      data.securityOauthToken = ide.token;
+      data.refreshToken = ide.refreshToken;
+      data.uid = ide.uid;
+      data.nickname = ide.nickname;
+      data.expireTime = ide.expireTime;
+      console.log(`[qoder-bridge] using intl IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"})`);
+    } else {
+      console.warn("[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat or log in to the IDE");
+    }
+  }
   if (!data.password) data.password = crypto.randomUUID();
   const keys = Array.isArray(data.api_keys) ? data.api_keys.filter((k) => k.key !== apiKey) : [];
   keys.push({ id: "all2api", key: apiKey, note: "managed by all2api", created_at: Math.floor(Date.now() / 1000) });
@@ -101,7 +122,7 @@ export async function startBridge(opts: {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  const hasPat = health.has_pat === true;
+  const hasPat = health.has_pat === true || !!data.securityOauthToken;
   if (health.status !== "ok") {
     child.kill();
     throw new Error("qoder bridge did not become healthy in time — check [qoder-bridge] log lines above");
