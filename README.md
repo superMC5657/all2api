@@ -65,7 +65,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api.exe`，首次启动时若不存在会自动从 third_party/qoder2api 源码编译，需本机有 Go ≥1.22），把 PAT 注入其 `bridges/qoder-data.json` 并监听 `127.0.0.1:10081`。
 
 - Qoder 网关的会话机制是 RSA+AES 混合加密 + MD5 签名（约 2900 行 Go 实现），本项目**不重写协议**，而是把成熟的开源实现作为 sidecar 子进程托管，all2api 对其做反向代理；
-- OpenAI 请求原样透传给 sidecar；`/v1/messages` 的 Anthropic 格式由本项目转换层（`src/translate/anthropic.ts`）双向转换：system/多段文本/图片/tool 调用/thinking（reasoning_content）/流式事件全部支持；
+- OpenAI 请求原样透传给 sidecar；`/v1/messages` 的 Anthropic 格式由本项目转换层（`src/translate/anthropic.ts`）双向转换：system/多段文本/图片/tool 调用/thinking（reasoning_content）/流式事件全部支持。**思考等级可控制**：OpenAI 协议直接传 `reasoning_effort`（qoder-intl 支持 none~xhigh 且实测有效；zcode 支持 low/high/max，模型始终思考不可关闭；codebuddy 接受但效果未证实）；Anthropic 协议的 `thinking` 参数由转换层映射为 `reasoning_effort`（enabled 按 budget_tokens 分档，disabled 映射 none），zcode 走原生透传不经映射；
 - 模型列表从网关动态获取（5 分钟缓存），也可在 `config.json` 静态指定；
 - sidecar 自带管理面板 `http://127.0.0.1:10081/admin`（密码在 `bridges/qoder-data.json` 的 `password` 字段），可看额度、订阅周期、用量统计。
 

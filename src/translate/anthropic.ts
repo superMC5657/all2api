@@ -25,6 +25,7 @@ export interface AnthropicRequest {
   stream?: boolean;
   tools?: Array<{ name: string; description?: string; input_schema?: unknown }>;
   tool_choice?: { type: "auto" | "any" | "tool"; name?: string };
+  thinking?: { type?: string; budget_tokens?: number };
 }
 
 function textOf(content: unknown): string {
@@ -106,6 +107,18 @@ export function anthropicToOpenAI(req: AnthropicRequest): Record<string, unknown
       req.tool_choice.type === "auto" ? "auto" : req.tool_choice.type === "any" ? "required" : { type: "function", function: { name: req.tool_choice.name } };
   }
 
+  // Anthropic thinking control → OpenAI reasoning_effort. Only acted on when
+  // the client asks explicitly: "enabled" maps the token budget to an effort
+  // level, "disabled" turns thinking off (honored by upstreams that allow it —
+  // e.g. qoder; zcode passes the Anthropic body through natively instead).
+  let reasoningEffort: string | undefined;
+  if (req.thinking?.type === "enabled") {
+    const budget = req.thinking.budget_tokens ?? 8192;
+    reasoningEffort = budget <= 1024 ? "low" : budget <= 8192 ? "medium" : budget <= 32768 ? "high" : "xhigh";
+  } else if (req.thinking?.type === "disabled") {
+    reasoningEffort = "none";
+  }
+
   return {
     model: req.model,
     messages,
@@ -113,6 +126,7 @@ export function anthropicToOpenAI(req: AnthropicRequest): Record<string, unknown
     temperature: req.temperature,
     top_p: req.top_p,
     stop: req.stop_sequences,
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     ...(tools && tools.length > 0 ? { tools, tool_choice: toolChoice } : {}),
     stream: req.stream === true,
   };
