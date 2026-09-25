@@ -1,0 +1,24 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "apiKey": "sk-all2api-change-me",
+  "defaultProvider": "zcode",
+  "upstreamTimeoutMs": 600000,
+  "providers": {
+    "zcode": {
+      "enabled": true,
+      "apiKey": "",
+      "anthropicBaseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "openaiBaseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "models": ["glm-5.3-flash", "glm-5.3", "glm-5.3-flashx"]
+    },
+    "qoder": {
+      "enabled": false,
+      "pat": "",
+      "bridgePath": "bridges/qoder2api.exe",
+      "bridgePort": 10081,
+      "bridgeApiKey": "",
+      "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
+    }
+  }
+}
