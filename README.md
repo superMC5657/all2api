@@ -113,19 +113,31 @@ bridges/                     # qoder2api sidecar 二进制 + 数据(gitignore)
 - **qoder 报 401**：PAT 未配置或失效；sidecar 日志带 `[qoder-bridge]` 前缀，配合管理面板排查。
 - **并发限制**：Qoder 单 PAT 并发窗口有限（超出返回业务码 10605），sidecar 默认排队；ZCode 遵守智谱计划本身的速率限制。
 
-## 附录：WorkBuddy（腾讯）逆向研究清单
+## 附录：CodeBuddy / WorkBuddy（腾讯）接入分析（2026-09-26，已实测验证）
 
-本机已确认的事实（`~/.workbuddy/`）：
+结论：**可接入，四家中协议最简单**——上游是标准 OpenAI chat 协议，凭据解密方案社区已验证，本机 Windows 5.6.2 全链路实测通过（提取密钥 → 解密 → 上游 200 正常回复）。CodeBuddy 免费额度：Free 档每月 2000 积分 + 新用户 500 积分。
 
-- 上游域名：`wb.tencentbuddy.com`、`copilot.tencent.com`、`workbuddy.cn`（见 `failover.json`，含熔断/探活配置）；
-- 凭据存储：`keyblob`（336B）+ `local_storage/*.info`（加密 blob），`security/at-rest-failures-v1.json` 表明存在静态加密层；`qimei-cache.json` 说明使用腾讯设备 ID 体系；
-- 社区无现成项目。
+已实测确认的事实链：
 
-建议路线：
+1. CodeBuddy 与 WorkBuddy **共用后端** `copilot.tencent.com`；WorkBuddy 桌面端把凭据存在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`（本机为 `workbuddy-desktop.info`，JSON：`account.uid` + `auth.accessToken/refreshToken/expiresAt/domain`）；
+2. WorkBuddy 5.6.x 把这两个 token 字段加密为 `{$wbEncrypted:1, envelope}` 信封（suite 1，AES-256-GCM，nonce 12B + tag 16B，AAD 框架 `WBEV1`/`sym-v1`，keyId 为 16 位 hex）；
+3. 密钥获取：用 WorkBuddy 自带的 Electron 二进制（本机 `E:\Program Files\Tencent\WorkBuddy\WorkBuddy.exe`，注册表 `HKLM\...\Uninstall` 可查）以 `ELECTRON_RUN_AS_NODE=1` 执行 `-e 'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))'`，得到 `{version:1, atRestSecretKey}`（32 字节 base64）；`protectorKey = sha256(该 base64 字符串, utf8)`；
+4. `keyId = sha256(protectorKey) 的前 16 位 hex`，与信封内 keyId 匹配校验后解密，AAD 构造（逐字转录自 app 本体，见下方参考实现）：`"WB-AAD\0" + 0x01 + len32("WBEV1") + len32("sym-v1") + suite + len32(keyId) + [2,0,0]`；
+5. 解密出的 accessToken（JWT）直接可用：`POST https://copilot.tencent.com/v2/chat/completions`，header `Authorization: Bearer` + `X-User-Id`(account.uid) + `X-Domain`(auth.domain，本机为 www.workbuddy.cn) + `X-Enterprise-Id`/`X-Tenant-Id`，body 为标准 OpenAI 格式 → 200，流式 chunk 含 `reasoning_content` 与原生 `function_call`（tools 支持）。
 
-1. mitmproxy 抓 WorkBuddy 客户端一轮真实对话，确认网关路径、请求体格式、SSE 帧结构（注意 `system-ca-bundle.pem`——客户端自带 CA bundle，可能有证书校验，需挂系统代理 + 安装 mitmproxy 根证书）；
-2. 定位 `keyblob` 的解密者（DPAPI 还是进程内密钥），可用 API Monitor/x64dbg 或在安装目录二进制中搜 crypto 特征；
-3. 确认 token 刷新机制后，仿照 qoder provider 的结构实现 `providers/workbuddy/`。
+接入 all2api 的实现要点：
+
+- 新增 `providers/codebuddy/`：凭据读取 + 信封解密（约 100 行，标准 node:crypto，零第三方依赖）+ Electron 密钥提取子进程（按 keyId 缓存）；token 临近过期时 `POST /v2/plugin/auth/token/refresh`（`X-Refresh-Token` 头）并**按原信封格式回写** auth 文件（`sealAuthFieldForTest` 给出了对称的封口实现）；
+- 上游**只支持流式**：非流式请求需本地聚合 SSE（含 tool_calls 分片拼接），Anthropic 兼容复用 `src/translate/anthropic.ts`（同 Qoder 路径）；
+- 模型列表：`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7/k2.6/k2.5`、`deepseek-v4-pro/flash`、`minimax-m3-pay`、`hy3-preview-agent`、`auto`；
+- 备选路线（不需要桌面端）：复刻 CLI 的 OAuth 设备授权三步（`plugin/auth/state?platform=CLI` → 浏览器登录 → `plugin/auth/token?state=` 轮询），适合未装桌面端的机器；签到/余额在 `www.codebuddy.cn` 域（`billing/meter/daily-checkin`、`billing/meter/get-user-resource`）。
+
+已知的坑（参考 workbuddy2api 的处理）：
+
+1. **内容审核误报**：客户端注入的 system 模板（含 DoS/exploit 等英文合规词）会被后端逐字匹配拦截（HTTP 400 + security policy 文案），发生在模型推理之前；
+2. **429 + code 6004** 是模型级限额（msg 带「将在 … 重置」时间），不是账号整体被限，换模型立即可用。
+
+参考实现：[corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect)（信封解密，`src/desktop-credential-protection.ts`，macOS 5.6.2 验证 + 本机 Windows 5.6.2 复现）、[Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（Go，OAuth 设备授权 + 多账号池）、[HanHan666666/codebuddy2openai](https://github.com/HanHan666666/codebuddy2openai)（Python，读旧版明文凭据，对新版加密格式无效）。
 
 ## 免责声明
 
