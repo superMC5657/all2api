@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 
 import { loadConfig } from "./config.js";
 import { forwardCompletion } from "./forward.js";
+import { CodeBuddyProvider } from "./providers/codebuddy/index.js";
 import { startBridge } from "./providers/qoder/bridge.js";
 import { QoderProvider } from "./providers/qoder/client.js";
 import type { ProviderAdapter } from "./providers/types.js";
@@ -23,6 +24,7 @@ if (cfg.providers.qoder.enabled) {
   });
   providers.push(new QoderProvider(cfg.providers.qoder, bridge, cfg.upstreamTimeoutMs));
 }
+if (cfg.providers.codebuddy.enabled) providers.push(new CodeBuddyProvider(cfg.providers.codebuddy, cfg.upstreamTimeoutMs));
 if (providers.length === 0) {
   console.error("[config] all providers are disabled — enable at least one in config.json");
   process.exit(1);

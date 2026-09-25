@@ -19,6 +19,13 @@
       "bridgePort": 10081,
       "bridgeApiKey": "",
       "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
+    },
+    "codebuddy": {
+      "enabled": false,
+      "authDir": "",
+      "electronPath": "",
+      "userAgent": "all2api/0.1",
+      "models": ["glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy3-preview-agent", "auto"]
     }
   }
 }

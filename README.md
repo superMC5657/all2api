@@ -6,7 +6,7 @@
 |---|---|---|---|---|
 | **zcode** | 智谱 GLM Coding Plan（ZCode CLI 登录后的额度） | 自动解密本机 `~/.zcode/v2/credentials.json`（AES-256-GCM，与 ZCode CLI 同源实现） | 原生 Anthropic + 原生 OpenAI（bigmodel coding 端点，纯透传） | ✅ 可用 |
 | **qoder** | Qoder 免费/订阅额度 | Qoder Integrations 页面生成 PAT（`pt-…`） | 经 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) sidecar（OpenAI 格式），Anthropic 由本项目转换层提供 | ✅ 可用（需 PAT） |
-| **workbuddy**（腾讯） | WorkBuddy 免费额度 | 需逆向（`keyblob` 加密 + 私有协议） | — | ⏸ 未实现，见文末研究清单 |
+| **codebuddy** | 腾讯 CodeBuddy/WorkBuddy 免费积分（Free 档 2000 积分/月） | 自动解密本机桌面端凭据（`CodeBuddyExtension/Data/Public/auth/*.info`，支持 5.6.x `$wbEncrypted` 加密信封） | 原生 OpenAI 协议（`copilot.tencent.com`，仅流式，本地聚合） | ✅ 可用（需本机登录桌面端） |
 
 > ⚠️ **风险与边界**：此类用法通常违反各家服务条款，账号可能被限流或封禁。本项目仅供个人在自有账号、自有额度内学习研究使用，**不支持也不提供批量注册、共享、倒卖等玩法**。反代服务持有你的真实凭据，请勿暴露公网（确需暴露请加 HTTPS 反代并修改 `apiKey`）。
 
@@ -70,6 +70,18 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 > 在 Linux/macOS 上：`cd bridges && go build -o qoder2api .`（源码克隆自上述仓库），并把 `providers.qoder.bridgePath` 改为 `bridges/qoder2api`。Docker 镜像内已自动处理。
 
+### codebuddy（零配置，覆盖 CodeBuddy 与 WorkBuddy）
+
+只要本机登录过腾讯 CodeBuddy 或 WorkBuddy **桌面端**（两者共用 `copilot.tencent.com` 后端和同一套凭据路径），启用 `providers.codebuddy.enabled` 即可：
+
+- 凭据在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`；新版桌面端把 token 字段加密为 `$wbEncrypted` 信封，all2api 会用 WorkBuddy 自己的 Electron 二进制提取静态密钥（`ELECTRON_RUN_AS_NODE` 调私有绑定）后解密——全程本机完成，密钥不落盘；
+- token 过期自动调 `/v2/plugin/auth/token/refresh` 刷新，并按原格式（明文/信封）原子回写 auth 文件，401 自动重试一次；
+- 上游是标准 OpenAI 协议但**只支持流式**：非流式请求由 all2api 本地聚合 SSE（含 tool_calls 分片拼接与 usage）；
+- 工具调用可用，但网关的 `tool_choice` 只接受字符串，对象形式会自动降级为 `required`（无法指定具体函数）；
+- 模型：`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7`、`kimi-k2.6`、`kimi-k2.5`、`deepseek-v4-pro`、`deepseek-v4-flash`、`minimax-m3-pay`、`hy3-preview-agent`、`auto`（以 `codebuddy/` 前缀使用）。
+
+验证凭据解密：`pnpm run decrypt:codebuddy`（输出脱敏）。Windows 上 Electron 路径自动从注册表定位（本例 `E:\Program Files\Tencent\WorkBuddy\WorkBuddy.exe`），也可用 `electronPath` 配置或 `WORKBUDDY_ELECTRON_BIN` 环境变量指定。
+
 ## 配置参考（config.json）
 
 | 字段 | 默认 | 说明 |
@@ -113,7 +125,7 @@ bridges/                     # qoder2api sidecar 二进制 + 数据(gitignore)
 - **qoder 报 401**：PAT 未配置或失效；sidecar 日志带 `[qoder-bridge]` 前缀，配合管理面板排查。
 - **并发限制**：Qoder 单 PAT 并发窗口有限（超出返回业务码 10605），sidecar 默认排队；ZCode 遵守智谱计划本身的速率限制。
 
-## 附录：CodeBuddy / WorkBuddy（腾讯）接入分析（2026-09-26，已实测验证）
+## 附录：CodeBuddy / WorkBuddy（腾讯）接入分析（2026-09-26，已实测验证，**已实现为 codebuddy provider**）
 
 结论：**可接入，四家中协议最简单**——上游是标准 OpenAI chat 协议，凭据解密方案社区已验证，本机 Windows 5.6.2 全链路实测通过（提取密钥 → 解密 → 上游 200 正常回复）。CodeBuddy 免费额度：Free 档每月 2000 积分 + 新用户 500 积分。
 

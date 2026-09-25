@@ -24,6 +24,16 @@ export interface QoderProviderConfig {
   models: string[];
 }
 
+export interface CodeBuddyProviderConfig {
+  enabled: boolean;
+  /** Override the auth dir; default is the platform CodeBuddyExtension path. */
+  authDir?: string;
+  /** Override the WorkBuddy desktop Electron binary used for key extraction (env: WORKBUDDY_ELECTRON_BIN). */
+  electronPath?: string;
+  userAgent: string;
+  models: string[];
+}
+
 export interface All2ApiConfig {
   host: string;
   port: number;
@@ -34,6 +44,7 @@ export interface All2ApiConfig {
   providers: {
     zcode: ZCodeProviderConfig;
     qoder: QoderProviderConfig;
+    codebuddy: CodeBuddyProviderConfig;
   };
 }
 
@@ -58,6 +69,23 @@ const DEFAULTS: All2ApiConfig = {
       bridgePort: 10081,
       models: ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
     },
+    codebuddy: {
+      enabled: false,
+      userAgent: "all2api/0.1",
+      models: [
+        "glm-5.2",
+        "glm-5.1",
+        "glm-5v-turbo",
+        "kimi-k2.7",
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "minimax-m3-pay",
+        "hy3-preview-agent",
+        "auto",
+      ],
+    },
   },
 };
 
@@ -81,6 +109,7 @@ export function loadConfig(): All2ApiConfig {
     providers: {
       zcode: { ...DEFAULTS.providers.zcode, ...fileConfig.providers?.zcode },
       qoder: { ...DEFAULTS.providers.qoder, ...fileConfig.providers?.qoder },
+      codebuddy: { ...DEFAULTS.providers.codebuddy, ...fileConfig.providers?.codebuddy },
     },
   };
   cfg.host = process.env.ALL2API_HOST ?? cfg.host;
