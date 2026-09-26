@@ -18,9 +18,9 @@ all2api 自身不直接实现 Qoder 协议，只做 HTTP 代理与 OpenAI⇄Anth
 | 文件 | 改动 |
 | --- | --- |
 | `auth/auth.go` | 新增 `RegionConfig` 与 `Resolve()`：按 `QODER_REGION=intl` 切换到 `center.qoder.sh` / `openapi.qoder.sh`；`AuthURL/ChatURL/ModelListURL` 按 region 取端点 |
-| `bridge/bridge.go` | `OpenAiBridge` 增加 `intlIdentity`；`bootstrapSession` 的 INTL 分支跳过 PAT 交换，直接用 IDE 身份（securityOauthToken/refreshToken/uid…）调 `applyJobToken` 建签名会话；`doRenew` 的 INTL 兜底守卫 |
-| `store/store.go` | `Config` 增加 `SecurityOauthToken/RefreshToken/UID/Nickname/ExpireTime` 字段（expireTime 用 float64 承载 int64）+ `GetIntlIdentity()` |
-| `main.go` | 从 store 读出身份传入 `NewOpenAiBridge(pat, region, intlIdentity)` |
+| `bridge/bridge.go` | `OpenAiBridge` 增加 `ideIdentity`；`bootstrapSession` 的 INTL 分支跳过 PAT 交换，直接用 IDE 身份（securityOauthToken/refreshToken/uid…）调 `applyJobToken` 建签名会话；`doRenew` 的 INTL 兜底守卫 |
+| `store/store.go` | `Config` 增加 `SecurityOauthToken/RefreshToken/UID/Nickname/ExpireTime` 字段（expireTime 用 float64 承载 int64）+ `GetIdeIdentity()` |
+| `main.go` | 从 store 读出身份传入 `NewOpenAiBridge(pat, region, ideIdentity)` |
 
 签名会话构造沿用上游国内版逻辑（`auth.NewSession`），国际版与国内版的差别只在端点与
 "是否有 PAT 交换"——这是实测得出的结论（国际版 `/algo` 路径同样要求签名，纯 Bearer 会被拒）。

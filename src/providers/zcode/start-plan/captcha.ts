@@ -10,7 +10,7 @@
  *   解析 stdout 的 VERIFY_PARAM= 行，超时杀进程）。setCaptchaSolver 可注入
  *   自定义 solver（测试/二期替换）；传 null 恢复默认 Node Runner。
  * - 预解池：FIFO + TTL 95s + MIN 3 / MAX 10 + 命中即后台补货
- *  （fire-and-forget）+ invalidateCaptchaPool() 清池。
+ *  （fire-and-forget）。
  * - 首请求池空时同步求解一次（等一次求解完成，超时/失败则返回 null，
  *   调用方按空值继续走现有重试路径）。本模块永不抛错。
  */
@@ -277,19 +277,6 @@ async function refillPool(config: CaptchaConfig): Promise<void> {
     refilling = false;
   }
 }
-
-/**
- * 上游返回验证码挑战时清空整池（该批 token/指纹已不可信，继续复用只会连环 3007）。
- * 对齐 Python CaptchaManager.invalidate()。
- */
-export function invalidateCaptchaPool(): void {
-  const drained = pool.length;
-  pool.length = 0;
-  if (drained > 0) console.warn(`[zcode] 验证码失效，清空预解池 ${drained} 枚`);
-}
-
-/** invalidateCaptchaPool 的别名（兼容 Python 侧 invalidate() 命名）。 */
-export const invalidateCaptcha: () => void = invalidateCaptchaPool;
 
 /**
  * 取一枚 verify param：池内 FIFO 命中即返回并后台补货；池空则同步求解一次。

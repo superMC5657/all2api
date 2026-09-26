@@ -348,7 +348,7 @@ export async function listElectronBinaries(configured?: string): Promise<string[
 }
 
 /** 定位 WorkBuddy 桌面端 Electron 二进制文件（首个命中；被钉时只认被钉项）。 */
-export async function findWorkBuddyElectron(configured?: string): Promise<string> {
+async function findWorkBuddyElectron(configured?: string): Promise<string> {
   return (await listElectronBinaries(configured))[0]!;
 }
 

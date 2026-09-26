@@ -15,21 +15,21 @@
 
 ```bash
 pnpm install
-pnpm start          # 首次运行自动生成 config.json（含随机 apiKey）
+pnpm start          # 首次运行自动生成 config.jsonc（含随机 apiKey；仅 jsonc 缺失且旧 config.json 存在时回落 legacy，见 src/config.ts:105-117）
 ```
 
 ```text
 all2api listening on http://127.0.0.1:8787
   OpenAI   : POST /v1/chat/completions
   Anthropic: POST /v1/messages
-  providers: zcode, qoder
+  providers: qoder-intl, codebuddy (default: qoderIntl)
 ```
 
 调用示例（OpenAI 兼容）：
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Authorization: Bearer <config.json 里的 apiKey>" \
+  -H "Authorization: Bearer <config.jsonc 里的 apiKey>" \
   -H "Content-Type: application/json" \
   -d '{"model":"glm-5.3-flash","stream":true,"max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
 ```
@@ -40,7 +40,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-export ANTHROPIC_AUTH_TOKEN=<config.json 里的 apiKey>
+export ANTHROPIC_AUTH_TOKEN=<config.jsonc 里的 apiKey>
 export ANTHROPIC_MODEL=glm-5.3-flash
 ```
 
@@ -59,17 +59,17 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 ### qoder（需要一个 PAT）
 
 1. 打开 Qoder → 设置 → **Integrations**，创建一个 Personal Access Token（`pt-` 开头）；
-2. 填入 `config.json` 的 `providers.qoder.pat`，重启 `pnpm start`；
+2. 填入 `config.jsonc` 的 `providers.qoder.pat`，重启 `pnpm start`；
 3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api`，Windows 下为 `bridges/qoder2api.exe`；首次启动时若不存在会自动从 third_party/qoder2api 源码编译，需本机有 Go ≥1.22），把 PAT 注入其 `bridges/qoder-cn.json`（海外版为 `bridges/qoder-intl.json`，见下节）并监听 `127.0.0.1:10081`（海外版 `10082`）。
 
 - Qoder 网关的会话机制是 RSA+AES 混合加密 + MD5 签名（约 2900 行 Go 实现），本项目**不重写协议**，而是把成熟的开源实现作为 sidecar 子进程托管，all2api 对其做反向代理；
 - OpenAI 请求原样透传给 sidecar；`/v1/messages` 的 Anthropic 格式由本项目转换层（`src/translate/anthropic.ts`）双向转换：system/多段文本/图片/tool 调用/thinking（reasoning_content）/流式事件全部支持。**思考等级可控制**：OpenAI 协议直接传 `reasoning_effort`（qoder-intl 支持 none~xhigh 且实测有效；zcode 支持 low/high/max，模型始终思考不可关闭；codebuddy 接受但效果未证实）；Anthropic 协议的 `thinking` 参数由转换层映射为 `reasoning_effort`（enabled 按 budget_tokens 分档，disabled 映射 none），zcode 走原生透传不经映射；
-- 模型列表从网关动态获取（5 分钟缓存），也可在 `config.json` 静态指定；
+- 模型列表从网关动态获取（5 分钟缓存），也可在 `config.jsonc` 静态指定；
 - sidecar 自带管理面板 `http://127.0.0.1:10081/admin`（密码在 `bridges/qoder-cn.json` 的 `password` 字段；海外版为 `10082` / `bridges/qoder-intl.json`），可看额度、订阅周期、用量统计。
 
 ### qoder-intl（海外版适配，已完成）
 
-`bridges/qoder2api`（Windows 下为 `.exe` 后缀）是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。补丁后的完整 Go 源码已收进 `third_party/qoder2api/`（上游基点、改动清单、patch 存档见其 `VENDOR.md`），改完源码跑 `pnpm build:sidecar` 即可重新编译。两个区域可同时运行（不同端口、不同 data 文件：`bridges/qoder-cn.json` / `bridges/qoder-intl.json`）：
+`bridges/qoder2api`（Windows 下为 `.exe` 后缀）是双区域版本：sidecar 原版硬编码国内网关，所用 fork 加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。Go 源码以 submodule 收进 `third_party/qoder2api/`（上游基点、改动清单见 `third_party/qoder2api.VENDOR.md`），改完源码跑 `pnpm build:sidecar` 即可重新编译。两个区域可同时运行（不同端口、不同 data 文件：`bridges/qoder-cn.json` / `bridges/qoder-intl.json`）：
 
 - 国际版端点映射（从海外版 IDE 的端点注册表提取 + 存活探测验证）：Auth/Chat → `center.qoder.sh`，OpenAPI（额度）→ `openapi.qoder.sh`；`/algo/api/v2/*` 路径与国内版同构，签名会话协议一致；
 - **鉴权与国内版不同**：海外版没有 Integrations PAT 交换，all2api 直接解密海外版 IDE 的登录身份（`state.vscdb` 的 `secret://aicoding.auth.userInfo`，Chromium os_crypt `v10`+AES-256-GCM，密钥经 `Local State` 的 DPAPI 解出）并以纯 Bearer + 签名会话直连——**零用户操作**，重启 all2api 时自动重新提取；
@@ -80,15 +80,15 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 只要本机登录过腾讯 CodeBuddy 或 WorkBuddy **桌面端**（两者共用 `copilot.tencent.com` 后端和同一套凭据路径），启用 `providers.codebuddy.enabled` 即可：
 
-- 凭据在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`；新版桌面端把 token 字段加密为 `$wbEncrypted` 信封，all2api 会用 WorkBuddy 自己的 Electron 二进制提取静态密钥（`ELECTRON_RUN_AS_NODE` 调私有绑定）后解密——全程本机完成，密钥不落盘；
+- 凭据全自动探测（双 App 都要探测，CodeBuddy 在前）：Windows 为 `%LOCALAPPDATA%` 下 `CodeBuddyExtension` / `WorkBuddyExtension` 各自的 `Data\Public\auth\*.info`；Linux 为 `$XDG_DATA_HOME` → `~/.local/share` → `$XDG_CONFIG_HOME` → `~/.config` 下的同名双目录；新版桌面端把 token 字段加密为 `$wbEncrypted` 信封，all2api 会用本机 Electron 二进制提取静态密钥（`ELECTRON_RUN_AS_NODE` 调私有绑定）后解密——全程本机完成，密钥不落盘；`.info` 不可用时回退读 CodeBuddy CN 的 `state.vscdb`（钥匙环口令 + AES，只读，`.info` 优先，见 `src/providers/codebuddy/vscdb.ts`）；
 - token 过期自动调 `/v2/plugin/auth/token/refresh` 刷新，并按原格式（明文/信封）原子回写 auth 文件，401 自动重试一次；
 - 上游是标准 OpenAI 协议但**只支持流式**：非流式请求由 all2api 本地聚合 SSE（含 tool_calls 分片拼接与 usage）；
 - 工具调用可用，但网关的 `tool_choice` 只接受字符串，对象形式会自动降级为 `required`（无法指定具体函数）；
 - 模型：`glm-5.3-flash`、`glm-5.3-flashx`、`glm-5.3`、`glm-5.2`、`glm-5.1`、`glm-5v-turbo`、`kimi-k2.7/k2.6/k2.5`、`deepseek-v4.1-flash`、`deepseek-v4-pro/flash`、`minimax-m3-pay`、`hy4-preview`、`hy3`、`hy3-preview`、`hy3-preview-agent`、`auto`（以 `codebuddy/` 前缀使用；腾讯网关无模型目录接口，列表为实测维护，新模型按 ID 探测补充）。
 
-验证凭据解密：`pnpm run decrypt:codebuddy`（输出脱敏）。Windows 上 Electron 路径自动从注册表定位（本例 `E:\Program Files\Tencent\WorkBuddy\WorkBuddy.exe`），也可用 `electronPath` 配置或 `WORKBUDDY_ELECTRON_BIN` 环境变量指定。
+验证凭据解密：`pnpm run decrypt:codebuddy`（输出脱敏）。Electron 二进制自动探测（双 App 都要探测，WorkBuddy 在前）：Windows 为 Program Files / LOCALAPPDATA 下的 Tencent WorkBuddy / CodeBuddy + 注册表卸载项双查；Linux 为实测 `buddycn` 真实路径（`/usr/share/buddycn/bin/buddycn`）→ PATH 中的 codebuddy/workbuddy/buddycn → `/opt` / `/usr/share` 下 `*buddy*` 目录 → `.desktop` 桌面项 Exec。特殊安装（双登录要钉源、异形路径）用 8 个显式键钉死（一般不用填，见 `src/config.ts:48-88`）：`authDir`（auth 目录或单个 `.info` 覆盖）、`electronPath` / `electronBinary`（二进制覆盖，`WORKBUDDY_ELECTRON_BIN` 环境变量优先于二者）、`keyBinding`（at-rest 密钥 linked-binding 名覆盖）、`vscdbPath` / `vscdbKey` / `vscdbApp` / `vscdbDir`（vscdb 凭据源四件套）。
 
-## 配置参考（config.json）
+## 配置参考（config.jsonc）
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
@@ -99,7 +99,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 | `providers.zcode.jwt` | 空 | 留空 = 自动读本机 `zcode login` 的 Start Plan JWT；也可手动填 JWT |
 | `providers.qoder.pat` | 空 | Qoder PAT |
 | `providers.qoder.bridgePath` | `bridges/qoder2api`（Windows `bridges/qoder2api.exe`） | sidecar 二进制路径 |
-| `providers.qoderIntl.pat` | 空 | 海外版 PAT（PAT 与本机 IDE 登录二选一；留空则自动复用本机登录，有真实 PAT 则 PAT 优先；Linux 上无本机登录可用，必须填真实 PAT） |
+| `providers.qoderIntl.pat` | 空 | 海外版 PAT（PAT 与本机 IDE 登录二选一；留空则自动复用本机登录，有真实 PAT 则 PAT 优先） |
 | `providers.qoderIntl.bridgePort` | `10082` | 海外版 sidecar 端口（国内版 `10081`） |
 
 **模型路由**：所有模型统一以 `provider/model` 形式展示与调用（如 `zcode/glm-5.3`、`codebuddy/hy4-preview`）；兼容起见，不带前缀的裸名仍会路由到默认 provider，但不再出现在 `/v1/models` 列表中。
@@ -113,17 +113,19 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 ```
 src/
 ├─ index.ts                  # 入口：鉴权、模型聚合、路由挂载
-├─ config.ts                 # config.json 加载 + 环境变量覆盖
+├─ config.ts                 # config.jsonc 加载 + 环境变量覆盖
 ├─ forward.ts                # 统一转发：解析模型 → 路由 → provider → 透传/翻译
 ├─ router.ts                 # "provider/model" 路由
 ├─ usage.ts                  # JSONL 用量日志
 ├─ translate/anthropic.ts    # Anthropic⇄OpenAI 双向转换（含流式）
 └─ providers/
    ├─ types.ts               # ProviderAdapter 接口
-   ├─ zcode/                 # cipher.ts(解密) credentials.ts(读凭据) client.ts(透传)
-   └─ qoder/                 # bridge.ts(sidecar 托管) client.ts(代理+翻译)
-scripts/                     # decrypt:zcode / test-translate
+   ├─ zcode/                 # cipher.ts(解密) credentials.ts(读凭据) client.ts(透传) start-plan/(Start Plan 通道)
+   ├─ qoder/                 # bridge.ts(sidecar 托管) client.ts(代理+翻译) constants.ts(区域常量) credentials.ts(IDE 身份)
+   └─ codebuddy/             # credentials.ts(凭据+解密) vscdb.ts(vscdb 源) client.ts(聚合转发)
+scripts/                     # decrypt:zcode / decrypt:codebuddy / decrypt:qoder-cn / decrypt:qoder-intl / build-sidecar / 4 套 test（test-translate、test-codebuddy、test-codebuddy-vscdb、test-codebuddy-pairing）
 bridges/                     # qoder2api sidecar 二进制(启动时自动编译,不入库) + 数据文件(凭据, gitignore)
+config.jsonc                 # 主配置（模板见 config.example.jsonc；旧 config.json 仅回落兼容，见 src/config.ts:105-117）
 ```
 
 ## 常见问题
@@ -141,7 +143,7 @@ bridges/                     # qoder2api sidecar 二进制(启动时自动编译
 
 1. CodeBuddy 与 WorkBuddy **共用后端** `copilot.tencent.com`；WorkBuddy 桌面端把凭据存在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`（本机为 `workbuddy-desktop.info`，JSON：`account.uid` + `auth.accessToken/refreshToken/expiresAt/domain`）；
 2. WorkBuddy 5.6.x 把这两个 token 字段加密为 `{$wbEncrypted:1, envelope}` 信封（suite 1，AES-256-GCM，nonce 12B + tag 16B，AAD 框架 `WBEV1`/`sym-v1`，keyId 为 16 位 hex）；
-3. 密钥获取：用 WorkBuddy 自带的 Electron 二进制（本机 `E:\Program Files\Tencent\WorkBuddy\WorkBuddy.exe`，注册表 `HKLM\...\Uninstall` 可查）以 `ELECTRON_RUN_AS_NODE=1` 执行 `-e 'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))'`，得到 `{version:1, atRestSecretKey}`（32 字节 base64）；`protectorKey = sha256(该 base64 字符串, utf8)`；
+3. 密钥获取：用本机 Electron 二进制（本机实例为 Tencent WorkBuddy，注册表 `HKLM\...\Uninstall` 可查；现已改为双 App 自动探测，见上文 codebuddy 一节）以 `ELECTRON_RUN_AS_NODE=1` 执行 `-e 'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))'`，得到 `{version:1, atRestSecretKey}`（32 字节 base64）；`protectorKey = sha256(该 base64 字符串, utf8)`；
 4. `keyId = sha256(protectorKey) 的前 16 位 hex`，与信封内 keyId 匹配校验后解密，AAD 构造（逐字转录自 app 本体，见下方参考实现）：`"WB-AAD\0" + 0x01 + len32("WBEV1") + len32("sym-v1") + suite + len32(keyId) + [2,0,0]`；
 5. 解密出的 accessToken（JWT）直接可用：`POST https://copilot.tencent.com/v2/chat/completions`，header `Authorization: Bearer` + `X-User-Id`(account.uid) + `X-Domain`(auth.domain，本机为 www.workbuddy.cn) + `X-Enterprise-Id`/`X-Tenant-Id`，body 为标准 OpenAI 格式 → 200，流式 chunk 含 `reasoning_content` 与原生 `function_call`（tools 支持）。
 

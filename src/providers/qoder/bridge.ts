@@ -38,7 +38,7 @@ interface BridgeDataFile {
 
 /**
  * sidecar 二进制是构建产物而非源码：绝不能提交入库。首次启动时（全新克隆），
- * 它由 third_party/qoder2api 中 vendored 的补丁源码编译而来——详见该目录的 VENDOR.md。
+ * 它由 third_party/qoder2api 中 vendored 的补丁源码编译而来——详见 third_party/qoder2api.VENDOR.md。
  * cn 与 intl 桥接共用同一个二进制，因此并发启动时共用一次构建。
  */
 const sidecarBuilds = new Map<string, Promise<string>>();
@@ -58,7 +58,7 @@ async function buildSidecar(binary: string): Promise<string> {
   const sourceDir = resolve(dirname(binary), "..", "third_party", "qoder2api");
   if (!existsSync(sourceDir)) {
     throw new Error(
-      `qoder bridge binary ${binary} not found and vendored sidecar source missing at ${sourceDir} — see third_party/qoder2api/VENDOR.md`,
+      `qoder bridge binary ${binary} not found and vendored sidecar source missing at ${sourceDir} — see third_party/qoder2api.VENDOR.md`,
     );
   }
   console.log(`[qoder-bridge] sidecar binary not found — building from ${sourceDir} ...`);

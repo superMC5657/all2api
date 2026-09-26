@@ -40,16 +40,6 @@ export interface QoderIdeIdentity {
   expireTime: number;
 }
 
-/** Chromium OSCrypt 负载前缀："v10"（AES-256-GCM）/ "v11"（AES-128-CBC）。 */
-export type OsCryptPrefix = "v10" | "v11";
-
-/** 一个解密候选：文件路径加其读取器（文件缺失 / 抛错均视为未命中）。 */
-export interface KeystoreCandidate<T> {
-  /** 已探测的文件路径——记入 `tried`（仅路径，绝不含内容）。 */
-  path: string;
-  read: () => T | null;
-}
-
 /** 加密二进制的存放位置。 */
 export type QoderIdeContainer = "sqlite-item" | "dat-file";
 /** Chromium OSCrypt 信封：v10 → AES-256-GCM，v11 → AES-128-CBC。 */
@@ -121,11 +111,6 @@ export function osCryptPrefix(blob: Buffer): string {
   return blob.slice(0, 3).toString();
 }
 
-/** 当二进制带有预期的 OSCrypt 前缀时为 true。 */
-export function hasOsCryptPrefix(blob: Buffer, prefix: OsCryptPrefix): boolean {
-  return osCryptPrefix(blob) === prefix;
-}
-
 /** "v10" 负载 → AES-256-GCM（nonce 12 字节 | 密文 | tag 16 字节）。 */
 export function aesGcmDecrypt(data: Buffer, key: Buffer): string {
   const nonce = data.slice(0, 12);
@@ -186,26 +171,6 @@ export function readWin32OsCryptKey(userDataDir: string, tmpInfix = ""): Buffer 
       }
     }
   }
-}
-
-/**
- * 候选探测（"firstExisting"）：存在才试、失败换下一个。
- * 返回首个非空命中，全部打不开则返回 null。每个探测过的路径都会追加到
- * `tried`，以便调用方在彻底失败时一次性告警已试路径
- *（仅路径，绝不含内容）。
- */
-export function firstExisting<T>(candidates: KeystoreCandidate<T>[], tried: string[] = []): T | null {
-  for (const candidate of candidates) {
-    tried.push(candidate.path);
-    try {
-      if (!existsSync(candidate.path)) continue;
-      const hit = candidate.read();
-      if (hit) return hit;
-    } catch {
-      // 换下一个候选
-    }
-  }
-  return null;
 }
 
 /** 脱敏的探测错误：仅消息且截断——绝不含密钥材料。 */

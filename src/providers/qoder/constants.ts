@@ -17,12 +17,12 @@ export function regionToProviderId(region: QoderRegion): string {
 export const dataPathFor = (r: QoderRegion): string => `bridges/qoder-${r}.json`;
 
 /** 默认 sidecar 二进制路径（win32 使用 .exe）。 */
-export function defaultBridgePath(): string {
+function defaultBridgePath(): string {
   return process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api";
 }
 
 /** cn 兜底模型列表（原文照录）。 */
-export const QODER_MODELS_BASE: string[] = [
+const QODER_MODELS_BASE: string[] = [
   "Qwen3.8-Max",
   "DeepSeek-V4-Pro",
   "GLM-5.3",
@@ -31,7 +31,7 @@ export const QODER_MODELS_BASE: string[] = [
 ];
 
 /** intl 兜底模型列表：BASE[0]、Qwen3.7-Max、…BASE.slice(1)。 */
-export const QODER_MODELS_INTL: string[] = [QODER_MODELS_BASE[0] as string, "Qwen3.7-Max", ...QODER_MODELS_BASE.slice(1)];
+const QODER_MODELS_INTL: string[] = [QODER_MODELS_BASE[0] as string, "Qwen3.7-Max", ...QODER_MODELS_BASE.slice(1)];
 
 export interface QoderRegionDefaults {
   enabled: boolean;
@@ -40,7 +40,7 @@ export interface QoderRegionDefaults {
   models: string[];
 }
 
-export const QODER_REGION_DEFAULTS: Record<QoderRegion, QoderRegionDefaults> = {
+const QODER_REGION_DEFAULTS: Record<QoderRegion, QoderRegionDefaults> = {
   cn: {
     enabled: false,
     // explicit "": 待填，domestic 必填。cn 未填时保持空字符串直通，由 loadConfig() 校验提示（去 config 或 admin 填），

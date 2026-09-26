@@ -193,7 +193,7 @@ function stripJsonc(text: string): string {
 }
 
 /** JSONC 解析：config.jsonc / config.example.jsonc（含 // 与块注释、尾逗号）统一走这里。 */
-export function parseJsonc<T>(text: string): T {
+function parseJsonc<T>(text: string): T {
   return JSON.parse(stripJsonc(text)) as T;
 }
 

@@ -201,7 +201,7 @@ interface StreamChunk {
 }
 
 /** 由一串 OpenAI deltas（增量片段）组装 Anthropic SSE（服务端推送事件流）帧。 */
-export class AnthropicStreamBuilder {
+class AnthropicStreamBuilder {
   private blockIndex = -1;
   private openBlock: "thinking" | "text" | null = null;
   private readonly toolBlocks = new Map<number, { anthropicIndex: number; started: boolean }>();
