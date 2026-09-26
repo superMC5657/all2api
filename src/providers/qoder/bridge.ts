@@ -139,21 +139,18 @@ export async function startBridge(opts: {
       data.uid = ide.uid;
       data.nickname = ide.nickname;
       data.expireTime = ide.expireTime;
-      if (region === "cn") {
-        // Go builds no bridge for an empty PAT (same reason intl needs its
-        // "intl" placeholder): the placeholder only clears that non-empty
-        // gate — the session still bootstraps purely from the IDE identity
-        // above, and no PAT exchange ever runs. A real PAT (config or admin
-        // panel) always replaces this marker.
-        data.pat = placeholderFor(region);
-      }
+      // Go builds no bridge for an empty PAT: the placeholder only clears
+      // that non-empty gate — the session still bootstraps purely from the
+      // IDE identity above, and no PAT exchange ever runs. A real PAT
+      // (config or admin panel) always replaces this marker. cn and intl
+      // alike (placeholder == region id, see placeholderFor).
+      data.pat = placeholderFor(region);
       console.log(`[qoder-bridge] using ${region} IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"}) — 已复用本机 Qoder IDE 登录（config 里 ${region} pat 为空即走此 IDE 身份，有真实 PAT 则 PAT 优先）`);
     } else {
       // Drop our own placeholder when the IDE login is gone — a stale marker
-      // must never masquerade as a PAT. (The marker is only ever written on
-      // the cn path.) A real PAT (e.g. from the sidecar admin panel) is left
-      // untouched so it takes effect.
-      if (region === "cn" && data.pat === placeholderFor("cn")) delete data.pat;
+      // must never masquerade as a PAT. A real PAT (e.g. from the sidecar
+      // admin panel) is left untouched so it takes effect.
+      if (data.pat === placeholderFor(region)) delete data.pat;
       const NO_IDE_WARN: Record<QoderRegion, string> = {
         intl:
           "[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT（中文：intl 未填 PAT 且没读到本机 IDE 登录，请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT，也可先登录海外版 Qoder IDE 后重启）",
