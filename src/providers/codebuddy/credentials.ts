@@ -156,7 +156,7 @@ export async function findWorkBuddyElectron(configured?: string): Promise<string
   ]);
   if (found) return found;
   throw new Error(
-    "WorkBuddy desktop binary not found — install/login the desktop app once, or set providers.codebuddy.electronPath (env: WORKBUDDY_ELECTRON_BIN)",
+    "WorkBuddy desktop binary not found — install/login the desktop app once, or set WORKBUDDY_ELECTRON_BIN env var",
   );
 }
 

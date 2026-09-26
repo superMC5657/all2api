@@ -114,9 +114,9 @@ export async function startBridge(opts: {
       data.uid = ide.uid;
       data.nickname = ide.nickname;
       data.expireTime = ide.expireTime;
-      console.log(`[qoder-bridge] using intl IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"})`);
+      console.log(`[qoder-bridge] using intl IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"}) — 已复用本机 Qoder IDE 登录（config 里 intl pat 请保持 "intl" 占位以通过 Go 非空门槛，真鉴权走此 IDE 身份）`);
     } else {
-      console.warn("[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat or log in to the IDE");
+      console.warn("[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT（中文：intl 未填 PAT 且没读到本机 IDE 登录，请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT，也可先登录海外版 Qoder IDE 后重启）");
     }
   }
   if (!data.password) data.password = crypto.randomUUID();
@@ -168,9 +168,15 @@ export async function startBridge(opts: {
     throw new Error("qoder bridge did not become healthy in time — check [qoder-bridge] log lines above");
   }
   if (!hasPat) {
-    console.warn(
-      "[qoder-bridge] no PAT configured — set providers.qoder.pat in config.json (or via the bridge admin panel), then restart all2api",
-    );
+    if (opts.region === "intl") {
+      console.warn(
+        "[qoder-bridge] no PAT configured — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT in config.json（中文：intl 缺 PAT（空 = 起不来），请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT）",
+      );
+    } else {
+      console.warn(
+        `[qoder-bridge] no PAT configured — set providers.qoder.pat in config.json (or via the bridge admin panel), then restart all2api（中文：国内版缺 PAT，请在 config.json 的 providers.qoder.pat 填写，或打开 http://127.0.0.1:${opts.port}/admin 管理后台填写后重启）`,
+      );
+    }
   }
 
   const stop = () => {

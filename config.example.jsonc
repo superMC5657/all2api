@@ -1,0 +1,59 @@
+// all2api 配置模板：cp config.example.json config.json 后改 apiKey / 各 provider 开关。
+// 本文件是 JSONC：可写 // 与 /* */ 注释、可留尾逗号，loadConfig 会 strip 后再 JSON.parse。
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  // all2api 自身的 Bearer 鉴权 key（客户端发 Authorization: Bearer <apiKey>）。
+  // 缺失 / 空 / 全空白 / 占位 "sk-all2api-change-me" 会在启动时自动生成随机 key 并文本级回写（保留注释）。
+  "apiKey": "sk-all2api-change-me",
+  // 裸模型 id（不带 provider/ 前缀）回落到这个 provider；"provider/model" 可显式 pin 到某 provider。
+  // 若该 id 对应的 provider 未启用，再回落到第一个已启用的 provider。
+  "defaultProvider": "qoderIntl",
+  "upstreamTimeoutMs": 600000,
+  "providers": {
+    "zcode": {
+      "enabled": false,
+      "apiKey": "",
+      "anthropicBaseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "openaiBaseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+      // models 仅展示（/v1/models 输出）+ 兜底：实际可用模型以网关为准。
+      "models": ["glm-5.3-flash", "glm-5.3", "glm-5.3-flashx"]
+    },
+    "qoder": {
+      "enabled": false,
+      // 国内版（region: "cn"）：三选一必须有 PAT，否则调不通——
+      // ① 这里的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat。
+      "pat": "",
+      // win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api。
+      "bridgePath": "bridges/qoder2api.exe",
+      "bridgePort": 10081,
+      "bridgeApiKey": "",
+      // "cn" = gateway.qoder.com.cn；"intl" = 海外 qoder.com 部署。
+      "region": "cn",
+      // models 为显示名（sidecar 映射到内部 key）；sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
+      "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
+    },
+    "qoderIntl": {
+      "enabled": true,
+      // 海外版（region: "intl"）：填 "intl" 占位或真实 PAT，空 = 起不来。
+      // Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换。
+      "pat": "intl",
+      // win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api。
+      "bridgePath": "bridges/qoder2api.exe",
+      "bridgePort": 10082,
+      "bridgeApiKey": "",
+      // "cn" = gateway.qoder.com.cn；"intl" = 海外 qoder.com 部署。
+      "region": "intl",
+      // models 为显示名（sidecar 映射到内部 key）；sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
+      "models": ["Qwen3.8-Max", "Qwen3.7-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
+    },
+    "codebuddy": {
+      "enabled": true,
+      // 路径自动探测：auth 读平台默认 CodeBuddyExtension 目录；electron 二进制自动探测，
+      // Linux/特殊安装用 WORKBUDDY_ELECTRON_BIN 环境变量覆盖。
+      "userAgent": "all2api/0.1",
+      // models 仅展示（/v1/models 输出）；腾讯网关无模型目录接口，拉不到时用此表。
+      "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
+    }
+  }
+}

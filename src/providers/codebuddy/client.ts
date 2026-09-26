@@ -24,7 +24,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
     config: CodeBuddyProviderConfig,
     private readonly timeoutMs: number,
   ) {
-    this.credentials = new CodeBuddyCredentials(config.authDir, config.electronPath, config.userAgent);
+    this.credentials = new CodeBuddyCredentials(undefined, undefined, config.userAgent);
     this.modelsList = config.models.length > 0 ? config.models : DEFAULT_MODELS;
   }
 

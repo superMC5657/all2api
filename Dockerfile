@@ -1,6 +1,6 @@
 FROM golang:1.26-alpine AS bridge-builder
 RUN apk add --no-cache git \
- && git clone --depth 1 https://github.com/EchoPing07/Qoder-2API-Go.git /qoder2api \
+ && git clone --depth 1 --branch main https://github.com/superMC5657/Qoder-2API-Go.git /qoder2api \
  && cd /qoder2api \
  && CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/qoder2api .
 

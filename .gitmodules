@@ -1,0 +1,5 @@
+[submodule "third_party/qoder2api"]
+	path = third_party/qoder2api
+	url = https://github.com/superMC5657/Qoder-2API-Go.git
+	branch = main
+	ignore = dirty

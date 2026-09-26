@@ -12,7 +12,14 @@ export interface ZCodeProviderConfig {
 
 export interface QoderProviderConfig {
   enabled: boolean;
-  /** Personal Access Token from Qoder Integrations (pt-…). Empty = bridge admin panel or previous data.json value is used. */
+  /**
+   * Personal Access Token (pt-…) from Qoder Integrations.
+   * - cn 国内版 (region: "cn")：三选一必须有 PAT，否则调不通——
+   *   ① config.json 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat。
+   * - intl 海外版 (region: "intl")：填 "intl" 占位或真实 PAT，空 = 起不来
+   *   （Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；
+   *   如有真实 intl PAT 可替换）。
+   */
   pat?: string;
   /** Path to the qoder2api sidecar binary (Qoder-2API-Go). */
   bridgePath: string;
@@ -28,10 +35,6 @@ export interface QoderProviderConfig {
 
 export interface CodeBuddyProviderConfig {
   enabled: boolean;
-  /** Override the auth dir; default is the platform CodeBuddyExtension path. */
-  authDir?: string;
-  /** Override the WorkBuddy desktop Electron binary used for key extraction (env: WORKBUDDY_ELECTRON_BIN). */
-  electronPath?: string;
   userAgent: string;
   models: string[];
 }
@@ -51,17 +54,165 @@ export interface All2ApiConfig {
   };
 }
 
-const CONFIG_PATH = join(process.cwd(), "config.json");
+const CONFIG_JSONC_PATH = join(process.cwd(), "config.jsonc");
+const CONFIG_LEGACY_PATH = join(process.cwd(), "config.json");
+
+/** 解析顺序：优先 config.jsonc；仅 jsonc 缺失且 legacy config.json 存在时回落（warn 一次提示迁移）。 */
+function resolveConfigPath(): string {
+  if (existsSync(CONFIG_JSONC_PATH)) return CONFIG_JSONC_PATH;
+  if (existsSync(CONFIG_LEGACY_PATH)) {
+    console.warn("[config] using legacy config.json — cp config.json config.jsonc to migrate");
+    return CONFIG_LEGACY_PATH;
+  }
+  console.error("[config] config.jsonc not found — cp config.example.jsonc config.jsonc then edit apiKey/providers");
+  process.exit(1);
+}
+
+/**
+ * 小而稳的 JSONC strip：正确处理字符串内的 `//` 与 `/* *\/`，
+ * 支持 `//` / `/* *\/` 注释与尾逗号。零依赖，手写故只做配置场景够用的子集。
+ */
+function stripJsonc(text: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (c === "\\") {
+        if (i + 1 < text.length) out += text[i + 1];
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      i += 2;
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        if (text[i] === "\n") out += "\n";
+        i++;
+      }
+      i = Math.min(i + 2, text.length);
+      continue;
+    }
+    if (c === ",") {
+      // 尾逗号：往前看跳过空白与注释，若紧跟 } 或 ] 则丢弃该逗号
+      let j = i + 1;
+      while (j < text.length) {
+        if (/\s/.test(text[j] ?? "")) {
+          j++;
+          continue;
+        }
+        if (text[j] === "/" && text[j + 1] === "/") {
+          j += 2;
+          while (j < text.length && text[j] !== "\n") j++;
+          continue;
+        }
+        if (text[j] === "/" && text[j + 1] === "*") {
+          j += 2;
+          while (j < text.length && !(text[j] === "*" && text[j + 1] === "/")) j++;
+          j += 2;
+          continue;
+        }
+        break;
+      }
+      if (text[j] === "}" || text[j] === "]") {
+        i++;
+        continue;
+      }
+      out += c;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** JSONC 解析：config.jsonc / config.example.jsonc（含 // 与块注释、尾逗号）统一走这里。 */
+export function parseJsonc<T>(text: string): T {
+  return JSON.parse(stripJsonc(text)) as T;
+}
+
+/** 找到顶层 {（跳过字符串与注释，避免命中注释里的花括号）。 */
+function findRootBrace(raw: string): number {
+  let inStr = false;
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i];
+    if (inStr) {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && raw[i + 1] === "/") {
+      i += 2;
+      while (i < raw.length && raw[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && raw[i + 1] === "*") {
+      i += 2;
+      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (c === "{") return i;
+    i++;
+  }
+  return -1;
+}
+
+const API_KEY_VALUE_RE = /("apiKey"\s*:\s*)(?:"(?:\\.|[^"\\])*"|[^,\}\n\r]+)/;
+
+/**
+ * 文本级回写 apiKey（保留原文件全部注释与格式）：
+ * - 存在 "apiKey" 值时原地替换值；
+ * - 缺失时在顶层 { 后插入一行。
+ */
+function persistApiKeyPreservingComments(raw: string, generated: string): string {
+  if (API_KEY_VALUE_RE.test(raw)) return raw.replace(API_KEY_VALUE_RE, `$1"${generated}"`);
+  const brace = findRootBrace(raw);
+  if (brace === -1) return raw;
+  const rest = raw.slice(brace + 1);
+  // 空对象（仅空白/注释 + }）时不留尾逗号，其余情况补逗号
+  const emptyObj = /^\s*(?:\/\/[^\n]*\s*|\/\*[\s\S]*?\*\/\s*)*\}/.test(rest);
+  const line = `\n  "apiKey": "${generated}"${emptyObj ? "" : ","}`;
+  return raw.slice(0, brace + 1) + line + rest;
+}
 
 const DEFAULTS: All2ApiConfig = {
   host: "127.0.0.1",
   port: 8787,
   apiKey: "",
-  defaultProvider: "zcode",
+  defaultProvider: "qoderIntl",
   upstreamTimeoutMs: 600_000,
   providers: {
     zcode: {
-      enabled: true,
+      enabled: false,
       anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
       openaiBaseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
       // 2026-09-26 用免费 Start Plan key 实测：flash/flashx 放行可用，
@@ -70,20 +221,28 @@ const DEFAULTS: All2ApiConfig = {
     },
     qoder: {
       enabled: false,
-      bridgePath: "bridges/qoder2api.exe",
+      // explicit "": 待填，domestic 必填。cn 未填时保持空字符串直通，由 loadConfig() 校验提示（去 config 或 admin 填），
+      // 避免字段缺失时旧 config.json（只有 baseUrl/models）合并后更迷惑。
+      pat: "",
+      // win32 用 .exe，其余平台（Linux/macOS）用无后缀二进制。
+      bridgePath: process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api",
       bridgePort: 10081,
       region: "cn",
       models: ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
     },
     qoderIntl: {
-      enabled: false,
-      bridgePath: "bridges/qoder2api.exe",
+      enabled: true,
+      // Go 门槛要求非空，此 "intl" 占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换。
+      pat: "intl",
+      // win32 用 .exe，其余平台（Linux/macOS）用无后缀二进制。
+      bridgePath: process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api",
       bridgePort: 10082,
       region: "intl",
-      models: ["qmodel_38max", "qmodel_latest", "dmodel", "kmodel", "mmodel", "gmodel"],
+      // 显示名，sidecar 映射到内部 key
+      models: ["Qwen3.8-Max", "Qwen3.7-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
     },
     codebuddy: {
-      enabled: false,
+      enabled: true,
       userAgent: "all2api/0.1",
       // 2026-09-26 实测网关逐个验证过；腾讯网关无模型目录接口，
       // 桌面端列表是它自己动态拉的，新模型出现时按 ID 规律探测补充
@@ -112,18 +271,9 @@ const DEFAULTS: All2ApiConfig = {
 };
 
 export function loadConfig(): All2ApiConfig {
-  let fileConfig: Partial<All2ApiConfig> = {};
-  if (existsSync(CONFIG_PATH)) {
-    fileConfig = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<All2ApiConfig>;
-  } else {
-    const generated: All2ApiConfig = {
-      ...DEFAULTS,
-      apiKey: `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`,
-    };
-    writeFileSync(CONFIG_PATH, JSON.stringify(generated, null, 2) + "\n");
-    console.log(`[config] created ${CONFIG_PATH} with a generated apiKey — edit it to your liking`);
-    fileConfig = generated;
-  }
+  const configPath = resolveConfigPath();
+  const raw = readFileSync(configPath, "utf8");
+  const fileConfig: Partial<All2ApiConfig> = parseJsonc<Partial<All2ApiConfig>>(raw);
 
   const cfg: All2ApiConfig = {
     ...DEFAULTS,
@@ -138,9 +288,38 @@ export function loadConfig(): All2ApiConfig {
   cfg.host = process.env.ALL2API_HOST ?? cfg.host;
   cfg.port = Number(process.env.ALL2API_PORT ?? cfg.port);
   cfg.apiKey = process.env.ALL2API_API_KEY ?? cfg.apiKey;
-  if (!cfg.apiKey) {
-    cfg.apiKey = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
-    console.warn(`[config] no apiKey configured — generated a temporary one for this run: ${cfg.apiKey}`);
+  if (!cfg.apiKey?.trim() || cfg.apiKey.trim() === "sk-all2api-change-me") {
+    const generated = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    const next = persistApiKeyPreservingComments(raw, generated);
+    writeFileSync(configPath, next.endsWith("\n") ? next : next + "\n");
+    console.log(`[config] apiKey missing or placeholder — generated a new one and wrote it to ${configPath}`);
+    cfg.apiKey = generated;
+  }
+  // qoder 配置体验校验（只 warn、不 throw，旧 config.json 形状缺字段时也能跑但要提示清楚）。
+  if (cfg.providers.qoder.enabled) {
+    const filePat = cfg.providers.qoder.pat?.trim() ?? "";
+    let legacyPat = "";
+    try {
+      const legacyPath = join(process.cwd(), "bridges", "qoder-cn.json");
+      if (existsSync(legacyPath)) {
+        const legacy = JSON.parse(readFileSync(legacyPath, "utf8")) as { pat?: unknown };
+        if (typeof legacy.pat === "string") legacyPat = legacy.pat.trim();
+      }
+    } catch {
+      // 读不到遗留文件就当没有，bridge 启动时还会再警告
+    }
+    if (!filePat && !legacyPat) {
+      console.warn(
+        `[config] providers.qoder 已启用但三处都没 PAT（config.pat / sidecar 管理后台 / bridges/qoder-cn.json 遗留）— ` +
+          `请在 config.json 的 providers.qoder.pat 填写 pt-…，或打开 http://127.0.0.1:${cfg.providers.qoder.bridgePort}/admin（默认密码 password）填写后重启`,
+      );
+    }
+  }
+  if (cfg.providers.qoderIntl.enabled && !cfg.providers.qoderIntl.pat?.trim()) {
+    console.warn(
+      `[config] providers.qoderIntl.pat 为空（空 = 起不来）— 请填 "intl" 占位或真实 PAT；` +
+        `占位仅过 Go 非空门槛，真鉴权走本机 IDE 登录`,
+    );
   }
   return cfg;
 }

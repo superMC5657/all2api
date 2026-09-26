@@ -12,7 +12,7 @@ function mask(value: string | undefined): string {
 
 const cfg = loadConfig();
 const cb = cfg.providers.codebuddy;
-const creds = new CodeBuddyCredentials(cb.authDir || undefined, cb.electronPath || undefined, cb.userAgent);
+const creds = new CodeBuddyCredentials(undefined, undefined, cb.userAgent);
 
 const file = creds.authFile();
 console.log("auth file:", file);

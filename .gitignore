@@ -1,9 +1,10 @@
 node_modules/
 dist/
-config.json
+config.json*
 usage.jsonl
 # sidecar 二进制由启动时自动编译（见 src/providers/qoder/bridge.ts），数据文件含凭据
 bridges/
 .env
 .DS_Store
 .zcode/
+.idea
