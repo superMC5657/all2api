@@ -23,7 +23,18 @@ export class CodeBuddyProvider implements ProviderAdapter {
     config: CodeBuddyProviderConfig,
     private readonly timeoutMs: number,
   ) {
-    this.credentials = new CodeBuddyCredentials(undefined, undefined, config.userAgent);
+    this.credentials = new CodeBuddyCredentials(
+      config.authDir?.trim() || undefined,
+      config.electronPath?.trim() || config.electronBinary?.trim() || undefined,
+      config.userAgent,
+      config.keyBinding?.trim() || undefined,
+      {
+        dbPath: config.vscdbPath?.trim() || undefined,
+        key: config.vscdbKey?.trim() || undefined,
+        app: config.vscdbApp?.trim() || undefined,
+        vscdbDir: config.vscdbDir?.trim() || undefined,
+      },
+    );
     this.modelsList = config.models.length > 0 ? config.models : DEFAULT_MODELS;
   }
 

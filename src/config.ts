@@ -49,6 +49,42 @@ export interface CodeBuddyProviderConfig {
   enabled: boolean;
   userAgent: string;
   models: string[];
+  /**
+   * auth 目录显式覆盖（其下 *.info 文件；也可直接指向单个 *.info 文件）。
+   * 缺省自动探测（双 App 都要探测，CodeBuddy 在前）：Windows 为 %LOCALAPPDATA%
+   * 下的 CodeBuddyExtension / WorkBuddyExtension；Linux 为 $XDG_DATA_HOME →
+   * ~/.local/share → $XDG_CONFIG_HOME → ~/.config 下的同名双目录。
+   */
+  authDir?: string;
+  /**
+   * Electron 二进制显式覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先于此）。
+   * 缺省自动探测（双 App 都要探测，WorkBuddy 在前）：Windows 为 Program Files /
+   * LOCALAPPDATA 下的 Tencent WorkBuddy / CodeBuddy + 注册表卸载项双查；
+   * Linux 为实测 buddycn 真实路径（/usr/share/buddycn/bin/buddycn）→ PATH 中的
+   * codebuddy/workbuddy/buddycn → /opt 下 *buddy* 目录 → /usr/share 下 *buddy* 目录
+   * → .desktop 桌面项 Exec → 常规安装位。
+   */
+  electronPath?: string;
+  /** electronPath 的别名；两者都填时 electronPath 优先。 */
+  electronBinary?: string;
+  /**
+   * at-rest 密钥 linked-binding 名显式覆盖（缺省按序尝试
+   * workbuddy 系 → codebuddy 系 → buddy 系变体，任一命中即用；keyId 校验保留）。
+   * 仅在各 App 绑定名与预设都不一致时需要。
+   */
+  keyBinding?: string;
+  /**
+   * CodeBuddy CN vscdb 凭据源（仅当 .info 不可用时 fallback，Win 行为不变）。
+   * 缺省 state.vscdb 路径为 ~/.config/CodeBuddy CN/User/globalStorage/state.vscdb，
+   * 覆盖顺序：CODEBUDDY_VSCDB 环境变量 > vscdbPath。
+   */
+  vscdbPath?: string;
+  /** vscdb ItemTable 键名（默认 planning-genie.new.accessTokencn）。 */
+  vscdbKey?: string;
+  /** 钥匙环 application 名（默认 CodeBuddy CN）。 */
+  vscdbApp?: string;
+  /** vscdb 应用目录名覆盖（默认 CodeBuddy CN，仅改变平台惯例路径中的目录段）。 */
+  vscdbDir?: string;
 }
 
 export interface All2ApiConfig {

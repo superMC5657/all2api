@@ -3,6 +3,7 @@
  * 只打印脱敏摘要——从不打印完整 token 与密钥材料。
  */
 import { CodeBuddyCredentials } from "../src/providers/codebuddy/credentials.js";
+import { resolveVscdbPath } from "../src/providers/codebuddy/vscdb.js";
 import { loadConfig } from "../src/config.js";
 
 function mask(value: string | undefined): string {
@@ -12,10 +13,24 @@ function mask(value: string | undefined): string {
 
 const cfg = loadConfig();
 const cb = cfg.providers.codebuddy;
-const creds = new CodeBuddyCredentials(undefined, undefined, cb.userAgent);
+const creds = new CodeBuddyCredentials(
+  cb.authDir?.trim() || undefined,
+  cb.electronPath?.trim() || cb.electronBinary?.trim() || undefined,
+  cb.userAgent,
+  cb.keyBinding?.trim() || undefined,
+  {
+    dbPath: cb.vscdbPath?.trim() || undefined,
+    key: cb.vscdbKey?.trim() || undefined,
+    app: cb.vscdbApp?.trim() || undefined,
+    vscdbDir: cb.vscdbDir?.trim() || undefined,
+  },
+);
 
-const file = creds.authFile();
-console.log("auth file:", file);
+try {
+  console.log("auth file:", creds.authFile());
+} catch {
+  console.log("auth file: <unavailable — will try vscdb> vscdb:", resolveVscdbPath(cb.vscdbPath?.trim() || undefined, cb.vscdbDir?.trim() || undefined));
+}
 
 const auth = await creds.get();
 console.log("CodeBuddy/WorkBuddy credentials decrypted successfully:");
