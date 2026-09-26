@@ -8,7 +8,7 @@ all2api 自身不直接实现 Qoder 协议，只做 HTTP 代理与 OpenAI⇄Anth
 
 - 原始上游：<https://github.com/EchoPing07/Qoder-2API-Go>
 - Fork（含国际版改动）：<https://github.com/superMC5657/Qoder-2API-Go.git>，分支 `main`
-- Fork commit：`440b11e3a543a1e9732dea920c504117faa9b3f7`（feat(intl): region support, resolve QODER_REGION=intl, IDE identity passthrough；基点 `c7c099a` 之上的 +93/-3）
+- Fork commit：`4066caa3cae54cec63278b949d16f568659a3d68`（refactor: intlIdentity -> ideIdentity, region-agnostic IDE session；基于 `440b11e`，后者基点 `c7c099a` 之上的 +93/-3）
 - 本目录（`third_party/qoder2api` submodule）直接指向上述 fork commit，无需再打补丁
 
 ## 国际版（INTL）区域支持（已落库到 fork）
