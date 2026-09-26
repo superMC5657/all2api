@@ -54,8 +54,7 @@
     },
     "codebuddy": {
       "enabled": true,
-      // 路径自动探测：auth 读平台默认 CodeBuddyExtension 目录；electron 二进制自动探测，
-      // Linux/特殊安装用 WORKBUDDY_ELECTRON_BIN 环境变量覆盖。
+      // 全自动探测（双App/.info/vscdb/钥匙环均自动），特殊安装（双登录要钉源、异形路径）见 README codebuddy 一节。
       "userAgent": "all2api/0.1",
       // models 仅展示（/v1/models 输出）；腾讯网关无模型目录接口，拉不到时用此表。
       "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
