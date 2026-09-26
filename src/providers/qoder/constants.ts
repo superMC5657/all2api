@@ -51,8 +51,9 @@ export const QODER_REGION_DEFAULTS: Record<QoderRegion, QoderRegionDefaults> = {
   },
   intl: {
     enabled: true,
-    // Go 门槛要求非空，此 "intl" 占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换。
-    pat: "intl",
+    // 与 cn 同构：PAT 与本机 IDE 登录二选一，留空则启动时自动复用本机海外版 IDE 登录
+    //（读到身份才写 "intl" 占位过 Go 非空门槛）；有真实 intl PAT 则 PAT 优先。
+    pat: "",
     bridgePort: 10082,
     // 显示名，sidecar 映射到内部 key
     models: QODER_MODELS_INTL,

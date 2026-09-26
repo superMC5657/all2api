@@ -43,9 +43,10 @@
     },
     "qoderIntl": {
       "enabled": true,
-      // 海外版：填 "intl" 占位或真实 PAT，空 = 起不来。
-      // Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换（PAT 优先）。
-      "pat": "intl",
+      // 海外版（region: "intl"）：与 qoder 同构，PAT 与本机 IDE 登录二选一——
+      // 留空则启动时自动复用本机海外版 IDE 登录（读到身份才写 "intl" 占位过 Go 非空门槛）。
+      // 有真实 intl PAT 则 PAT 优先；Linux 上无本机登录可用，必须填真实 PAT。
+      "pat": "",
       "bridgePort": 10082,
       // "bridgeApiKey": "", // 见公共语义：缺省自动生成
       "region": "intl",

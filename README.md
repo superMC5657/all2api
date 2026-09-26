@@ -6,7 +6,7 @@
 |---|---|---|---|---|
 | **zcode** | 智谱 GLM Coding Plan（ZCode CLI 登录后的额度） | 自动解密本机 `~/.zcode/v2/credentials.json`（AES-256-GCM，与 ZCode CLI 同源实现）取出 Start Plan JWT；`providers.zcode.jwt` 非空则优先使用显式 JWT | Start Plan JWT 通道（Anthropic/OpenAI 双协议统一走 `https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages` + Bearer JWT，纯透传，不再依赖按量端点） | ✅ 可用 |
 | **qoder** | Qoder 国内版额度（qoder.com.cn） | 国内版 IDE/CLI 的 Integrations PAT（`pt-…`）；留空则复用本机 Qoder CN 桌面端登录，有真实 PAT 时 PAT 优先 | 经 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) sidecar（OpenAI 格式），Anthropic 由本项目转换层提供 | ✅ 可用（PAT 优先，留空走本机登录） |
-| **qoder-intl** | Qoder 海外版额度（qoder.com） | `providers.qoderIntl.pat` 填 `intl` 占位或真实 PAT（空 = 起不来）；真鉴权默认复用本机海外版 IDE 登录身份（Electron os_crypt + DPAPI），有真实 PAT 时 PAT 优先 | 同一 sidecar，`QODER_REGION=intl` 切到 `center.qoder.sh`，纯 Bearer + 签名会话 | ✅ 可用（PAT 优先，缺 PAT 走本机登录海外版 IDE） |
+| **qoder-intl** | Qoder 海外版额度（qoder.com） | 海外版 PAT；留空则复用本机海外版 IDE 登录身份（win32 走 DPAPI，Linux 走 gnome-keyring），有真实 PAT 时 PAT 优先 | 同一 sidecar，`QODER_REGION=intl` 切到 `center.qoder.sh`，纯 Bearer + 签名会话 | ✅ 可用（PAT 优先，留空走本机登录） |
 | **codebuddy** | 腾讯 CodeBuddy/WorkBuddy 免费积分（Free 档 2000 积分/月） | 自动解密本机桌面端凭据（`CodeBuddyExtension/Data/Public/auth/*.info`，支持 5.6.x `$wbEncrypted` 加密信封） | 原生 OpenAI 协议（`copilot.tencent.com`，仅流式，本地聚合） | ✅ 可用（需本机登录桌面端） |
 
 > ⚠️ **风险与边界**：此类用法通常违反各家服务条款，账号可能被限流或封禁。本项目仅供个人在自有账号、自有额度内学习研究使用，**不支持也不提供批量注册、共享、倒卖等玩法**。反代服务持有你的真实凭据，请勿暴露公网（确需暴露请加 HTTPS 反代并修改 `apiKey`）。
@@ -99,7 +99,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 | `providers.zcode.jwt` | 空 | 留空 = 自动读本机 `zcode login` 的 Start Plan JWT；也可手动填 JWT |
 | `providers.qoder.pat` | 空 | Qoder PAT |
 | `providers.qoder.bridgePath` | `bridges/qoder2api`（Windows `bridges/qoder2api.exe`） | sidecar 二进制路径 |
-| `providers.qoderIntl.pat` | `intl` | 海外版占位或真实 PAT（空 = 起不来；有真实 PAT 则 PAT 优先，否则走本机 IDE 登录） |
+| `providers.qoderIntl.pat` | 空 | 海外版 PAT（PAT 与本机 IDE 登录二选一；留空则自动复用本机登录，有真实 PAT 则 PAT 优先；Linux 上无本机登录可用，必须填真实 PAT） |
 | `providers.qoderIntl.bridgePort` | `10082` | 海外版 sidecar 端口（国内版 `10081`） |
 
 **模型路由**：所有模型统一以 `provider/model` 形式展示与调用（如 `zcode/glm-5.3`、`codebuddy/hy4-preview`）；兼容起见，不带前缀的裸名仍会路由到默认 provider，但不再出现在 `/v1/models` 列表中。

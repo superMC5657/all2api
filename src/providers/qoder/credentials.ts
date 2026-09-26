@@ -10,7 +10,10 @@ import { DatabaseSync } from "node:sqlite";
  *
  * 两种风味复用相同的 Electron/Chromium OSCrypt 信封，仅数据源不同
  *（文件路径、sqlite 键、字段映射、region）：
- *   - intl：win32 DPAPI + state.vscdb + AES-256-GCM（"v10"）
+ *   - intl：win32 DPAPI + state.vscdb + AES-256-GCM（"v10"）；
+ *          Linux 为 gnome-keyring + state.vscdb + AES-128-CBC（"v11"）
+ *          的 best-effort 候选（UNVERIFIED，本机无海外版 Linux IDE 实测，
+ *          仿 win32-CN 思路，见 intlLinuxEntries）
  *   - cn：Linux gnome-keyring + auth.v1.dat + AES-128-CBC（"v11"），
  *          另加尽力而为的 win32 候选探测（按文件区分 DPAPI "v10" /
  *          PBKDF2 "v11"）
@@ -424,13 +427,72 @@ function intlEntries(ideDataDir?: string): QoderIdeSource[] {
   ];
 }
 
-export function readQoderIdeIdentity(ideDataDir?: string): QoderIdeIdentity | null {
-  if (process.platform !== "win32") return null; // 基于 DPAPI；其他平台需不同密钥存储
-  try {
-    return runQoderIdeSources(intlEntries(ideDataDir));
-  } catch {
-    return null;
+/**
+ * 海外版 Linux 候选表（UNVERIFIED —— 本机无海外版 Linux IDE 实测，
+ * 仿 win32-CN 的 best-effort：候选根为 XDG_CONFIG_HOME / ~/.config 下的
+ * Qoder（含 com.qoder.* 发现），文件固定为
+ * User/globalStorage/state.vscdb，container 沿用 sqlite-item，
+ * itemKey 沿用 INTL_STATE_KEY；scheme 只写 "v11-cbc"
+ *（Chromium-on-Linux 默认；引擎按 prefix 匹配，v10 真出现也只会记 prefix
+ * 报 miss，不会崩——probe 保留 prefix 记录以便将来按真实 blob 补 scheme）。
+ */
+function intlLinuxEntries(ideDataDir?: string): QoderIdeSource[] {
+  const roots: string[] = [];
+  if (ideDataDir) {
+    roots.push(ideDataDir);
+  } else {
+    const configHome = process.env["XDG_CONFIG_HOME"] ?? join(homedir(), ".config");
+    const push = (p?: string) => {
+      if (p && !roots.includes(p)) roots.push(p);
+    };
+    push(join(configHome, "Qoder"));
+    for (const d of discoverQoderIntlDirs(configHome)) push(d);
   }
+  return roots.map((root) => ({
+    id: `intl-linux-state.vscdb:${root}`,
+    region: "intl",
+    platform: "linux",
+    root,
+    file: join(root, "User", "globalStorage", "state.vscdb"),
+    container: "sqlite-item",
+    itemKey: INTL_STATE_KEY,
+    scheme: "v11-cbc",
+    keySource: "gnome-keyring",
+    getPassword: osCryptIntlPassword,
+    fieldMap: QODER_FIELD_MAP,
+    probeKind: "state.vscdb",
+  }));
+}
+
+/** 配置目录下自动发现的海外版 Qoder 目录：com.qoder* 或同时含 qoder 与 intl。缺失 / 不可读 → []（复用 CN discover 思路）。 */
+function discoverQoderIntlDirs(base: string): string[] {
+  try {
+    return readdirSync(base, { withFileTypes: true })
+      .filter(
+        (e) => e.isDirectory() && (/com\.qoder/i.test(e.name) || (/qoder/i.test(e.name) && /intl/i.test(e.name))),
+      )
+      .map((e) => join(base, e.name));
+  } catch {
+    return [];
+  }
+}
+
+export function readQoderIdeIdentity(ideDataDir?: string): QoderIdeIdentity | null {
+  if (process.platform === "win32") {
+    try {
+      return runQoderIdeSources(intlEntries(ideDataDir));
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "linux") {
+    try {
+      return runQoderIdeSources(intlLinuxEntries(ideDataDir));
+    } catch {
+      return null;
+    }
+  }
+  return null; // 基于 DPAPI/gnome-keyring；其他平台需不同密钥存储
 }
 
 // ---------------------------------------------------------------------------
@@ -540,16 +602,16 @@ function readQoderCnLinuxIdentity(authFile?: string): QoderIdeIdentity | null {
 }
 
 /**
- * 经系统 python3-gi 绑定从 gnome-keyring 获取 CN IDE 的
+ * 经系统 python3-gi 绑定从 gnome-keyring 按应用名单获取
  * Electron safeStorage 口令（不引入新依赖）。
  * 该密钥仅经管道进入内存——绝不记入日志。
  */
-function osCryptPassword(): string | null {
+function osCryptPasswordFor(apps: string[]): string | null {
   const script = `
 import gi, sys
 gi.require_version('Secret', '1')
 from gi.repository import Secret
-apps = ${JSON.stringify(KEYRING_APPS)}
+apps = ${JSON.stringify(apps)}
 svc = Secret.Service.get_sync(Secret.ServiceFlags.LOAD_COLLECTIONS, None)
 for coll in Secret.Service.get_collections(svc):
     for it in coll.get_items():
@@ -568,6 +630,16 @@ sys.exit(1)
   return password || null;
 }
 
+/** CN IDE 的 gnome-keyring 口令（名单见 KEYRING_APPS；行为与抽取前一致）。 */
+function osCryptPassword(): string | null {
+  return osCryptPasswordFor(KEYRING_APPS);
+}
+
+/** 海外版 gnome-keyring 口令（UNVERIFIED —— 本机无海外版 Linux IDE，名单为 best-effort）。 */
+function osCryptIntlPassword(): string | null {
+  return osCryptPasswordFor(INTL_KEYRING_APPS);
+}
+
 /** win32 上显式的 v11 覆盖（Linux 改为从 gnome-keyring 读取该口令）。 */
 function win32EnvPassword(): string | null {
   return process.env["QODER_CN_OS_CRYPT_PASSWORD"]?.trim() || null;
@@ -578,6 +650,13 @@ function win32EnvPassword(): string | null {
 // ---------------------------------------------------------------------------
 
 const KEYRING_APPS = ["Qoder CN App", "Qoder CN", "QoderCN"];
+
+/**
+ * 海外版 gnome-keyring 应用名单（UNVERIFIED —— 本机无海外版 Linux IDE 实测，
+ * 仿 CN 名单的 best-effort 覆盖；条目形如 application=Qoder* +
+ * xdg:schema 含 os_crypt，见 osCryptPasswordFor）。
+ */
+const INTL_KEYRING_APPS = ["Qoder", "Qoder Intl", "QoderIntl"];
 
 function makeCnDatSource(opts: { root: string; file: string; id: string }): QoderIdeSource {
   return {
