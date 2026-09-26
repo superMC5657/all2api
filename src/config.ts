@@ -17,12 +17,6 @@ export interface ZCodeProviderConfig {
   appVersion?: string;
   /** 一号一台设备指纹持久化文件，默认 ~/.zcode/v2/all2api-device.json */
   deviceFile?: string;
-  /** @deprecated coding-plan/bigmodel API-Key 通道已移除；保留仅为兼容旧配置解析，不再使用 */
-  apiKey?: string;
-  /** @deprecated 已废弃（曾为 open.bigmodel.cn 基址）；保留仅为兼容旧配置解析，不再使用 */
-  anthropicBaseUrl?: string;
-  /** @deprecated 已废弃；保留仅为兼容旧配置解析，不再使用 */
-  openaiBaseUrl?: string;
 }
 
 export interface QoderProviderConfig {

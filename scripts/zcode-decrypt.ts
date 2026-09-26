@@ -17,7 +17,4 @@ if (!creds) {
 }
 
 console.log("ZCode credentials decrypted successfully:");
-console.log("  active provider : ", creds.activeProvider ?? "(none)");
-console.log("  user id         : ", (creds.userInfo?.id as string | undefined) ?? "(none)");
-console.log("  oauth token     : ", mask(creds.oauthAccessToken));
 console.log("  zcode jwt       : ", mask(creds.zcodeJwt));

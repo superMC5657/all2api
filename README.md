@@ -4,7 +4,7 @@
 
 | Provider | 额度来源 | 凭据获取方式 | 上游协议 | 状态 |
 |---|---|---|---|---|
-| **zcode** | 智谱 GLM Coding Plan（ZCode CLI 登录后的额度） | 自动解密本机 `~/.zcode/v2/credentials.json`（AES-256-GCM，与 ZCode CLI 同源实现） | 原生 Anthropic + 原生 OpenAI（bigmodel coding 端点，纯透传） | ✅ 可用 |
+| **zcode** | 智谱 GLM Coding Plan（ZCode CLI 登录后的额度） | 自动解密本机 `~/.zcode/v2/credentials.json`（AES-256-GCM，与 ZCode CLI 同源实现）取出 Start Plan JWT；`providers.zcode.jwt` 非空则优先使用显式 JWT | Start Plan JWT 通道（Anthropic/OpenAI 双协议统一走 `https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages` + Bearer JWT，纯透传，不再依赖按量端点） | ✅ 可用 |
 | **qoder** | Qoder 国内版额度（qoder.com.cn） | 国内版 IDE/CLI 的 Integrations PAT（`pt-…`）；留空则复用本机 Qoder CN 桌面端登录，有真实 PAT 时 PAT 优先 | 经 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) sidecar（OpenAI 格式），Anthropic 由本项目转换层提供 | ✅ 可用（PAT 优先，留空走本机登录） |
 | **qoder-intl** | Qoder 海外版额度（qoder.com） | `providers.qoderIntl.pat` 填 `intl` 占位或真实 PAT（空 = 起不来）；真鉴权默认复用本机海外版 IDE 登录身份（Electron os_crypt + DPAPI），有真实 PAT 时 PAT 优先 | 同一 sidecar，`QODER_REGION=intl` 切到 `center.qoder.sh`，纯 Bearer + 签名会话 | ✅ 可用（PAT 优先，缺 PAT 走本机登录海外版 IDE） |
 | **codebuddy** | 腾讯 CodeBuddy/WorkBuddy 免费积分（Free 档 2000 积分/月） | 自动解密本机桌面端凭据（`CodeBuddyExtension/Data/Public/auth/*.info`，支持 5.6.x `$wbEncrypted` 加密信封） | 原生 OpenAI 协议（`copilot.tencent.com`，仅流式，本地聚合） | ✅ 可用（需本机登录桌面端） |
@@ -50,10 +50,8 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 只要本机登录过 ZCode CLI（存在 `~/.zcode/v2/credentials.json`），无需任何配置：
 
-- all2api 用与 CLI 完全同源的解密实现（`src/providers/zcode/cipher.ts`，AES-256-GCM + sha256 派生，派生串含平台/用户主目录/用户名，**只能在登录时的同一台机器、同一用户下解密**）取出 coding-plan API key；
-- 该 key 是标准智谱 key，直接驱动两个原生端点：
-  - Anthropic 格式 `https://open.bigmodel.cn/api/anthropic/v1/messages`
-  - OpenAI 格式 `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions`
+- all2api 用与 CLI 完全同源的解密实现（`src/providers/zcode/cipher.ts`，AES-256-GCM + sha256 派生，派生串含平台/用户主目录/用户名，**只能在登录时的同一台机器、同一用户下解密**）取出 Start Plan JWT（`providers.zcode.jwt` 非空则优先使用显式 JWT）；
+- Anthropic 与 OpenAI 双协议统一走 Start Plan 通道 `https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages` + Bearer JWT，不再依赖按量端点；
 - 两种协议都是**纯透传**（含 thinking/reasoning 内容、tools、图片），没有自研格式转换，bug 面最小。
 
 验证解密：`pnpm run decrypt:zcode`（输出脱敏）。
@@ -98,7 +96,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 | `apiKey` | 随机生成 | 客户端访问 all2api 用的 Bearer key（**不是**上游 key）；`ALL2API_API_KEY` 可覆盖 |
 | `defaultProvider` | `qoderIntl` | 不带前缀的模型名路由到哪个 provider |
 | `upstreamTimeoutMs` | `600000` | 上游请求超时 |
-| `providers.zcode.apiKey` | 空 | 留空 = 自动解密本机凭据；也可手动填智谱 key |
+| `providers.zcode.jwt` | 空 | 留空 = 自动读本机 `zcode login` 的 Start Plan JWT；也可手动填 JWT |
 | `providers.qoder.pat` | 空 | Qoder PAT |
 | `providers.qoder.bridgePath` | `bridges/qoder2api`（Windows `bridges/qoder2api.exe`） | sidecar 二进制路径 |
 | `providers.qoderIntl.pat` | `intl` | 海外版占位或真实 PAT（空 = 起不来；有真实 PAT 则 PAT 优先，否则走本机 IDE 登录） |
@@ -130,10 +128,10 @@ bridges/                     # qoder2api sidecar 二进制(启动时自动编译
 
 ## 常见问题
 
-- **换机器/换用户后 zcode 解密失败**：派生密钥绑定平台+主目录+用户名，属预期行为。在目标机器上重新 `zcode login`，或在 config.json 手动填 key。
+- **换机器/换用户后 zcode 解密失败**：派生密钥绑定平台+主目录+用户名，属预期行为。在目标机器上重新 `zcode login`，或在 config.jsonc 手动填 `providers.zcode.jwt`（Start Plan JWT）。
 - **ZCode CLI 升级后加密格式变化**：cipher 实现提取自 CLI 本体，若上游改了 `enc:v1` 方案，需要同步更新 `src/providers/zcode/cipher.ts`。
 - **qoder 报 401**：PAT 未配置或失效；sidecar 日志带 `[qoder-bridge]` 前缀，配合管理面板排查。
-- **并发限制**：Qoder 单 PAT 并发窗口有限（超出返回业务码 10605），sidecar 默认排队；ZCode 遵守智谱计划本身的速率限制。
+- **并发限制**：Qoder 单 PAT 并发窗口有限（超出返回业务码 10605），sidecar 默认排队；ZCode 遵守 Start Plan 本身的速率限制。
 
 ## 附录：CodeBuddy / WorkBuddy（腾讯）接入分析（2026-09-26，已实测验证，**已实现为 codebuddy provider**）
 

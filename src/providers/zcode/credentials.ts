@@ -4,22 +4,16 @@ import { join } from "node:path";
 
 import { createZCodeCredentialCipher } from "./cipher.js";
 
-export interface ZCodeUserInfo {
-  id?: string;
-  [key: string]: unknown;
-}
-
 export interface ZCodeCredentials {
-  oauthAccessToken?: string;
   zcodeJwt?: string;
-  activeProvider?: string;
-  userInfo?: ZCodeUserInfo;
 }
 
 /**
  * Reads and decrypts ~/.zcode/v2/credentials.json (the file ZCode CLI maintains
  * after `zcode login`). Values are AES-256-GCM encrypted with a machine-derived
  * key, so decryption only works on the same machine/user that ran the login.
+ *
+ * Start Plan JWT 通道只用 zcodeJwt（coding-plan/bigmodel 按量通道已移除）。
  */
 export function readZCodeCredentials(credentialsPath?: string): ZCodeCredentials | null {
   const path = credentialsPath ?? join(homedir(), ".zcode", "v2", "credentials.json");
@@ -32,21 +26,8 @@ export function readZCodeCredentials(credentialsPath?: string): ZCodeCredentials
     return typeof value === "string" && value.startsWith("enc:v1:") ? cipher.decrypt(value) : undefined;
   };
 
-  let userInfo: ZCodeUserInfo | undefined;
-  const rawUserInfo = dec("oauth:bigmodel:user_info");
-  if (rawUserInfo) {
-    try {
-      userInfo = JSON.parse(rawUserInfo) as ZCodeUserInfo;
-    } catch {
-      userInfo = undefined;
-    }
-  }
-
   const creds: ZCodeCredentials = {
-    oauthAccessToken: dec("oauth:bigmodel:access_token"),
     zcodeJwt: dec("zcodejwttoken"),
-    activeProvider: dec("oauth:active_provider"),
-    userInfo,
   };
   return creds;
 }
