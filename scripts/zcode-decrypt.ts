@@ -1,6 +1,6 @@
 /**
- * Decrypts ~/.zcode/v2/credentials.json and prints a redacted summary.
- * Verifies the cipher port before wiring the proxy. Never prints full tokens.
+ * 解密 ~/.zcode/v2/credentials.json 并打印脱敏摘要。
+ * 在接入代理前校验 cipher 端口。从不打印完整 token。
  */
 import { readZCodeCredentials } from "../src/providers/zcode/credentials.js";
 

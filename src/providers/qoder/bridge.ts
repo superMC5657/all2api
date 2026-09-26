@@ -6,12 +6,12 @@ import { readQoderIdeIdentityFor } from "./credentials.js";
 import { placeholderFor, REGION_ENV, type QoderRegion } from "./constants.js";
 
 /**
- * Manages the Qoder-2API-Go sidecar binary: prepares its data.json (PAT + API key),
- * spawns it, waits for /health, and exposes a base URL for proxying.
+ * 管理 Qoder-2API-Go sidecar 二进制：准备其 data.json（PAT + API key），
+ * 拉起子进程，等待 /health 就绪，并对外暴露用于转发的 base URL。
  *
- * The sidecar implements Qoder's gateway protocol (RSA+AES session crypto, MD5
- * signatures) and speaks OpenAI-compatible HTTP — reimplementing that in TS is
- * not worth the risk, so all2api drives it as a local subprocess instead.
+ * 该 sidecar 实现了 Qoder 网关协议（RSA+AES 会话加密、MD5 签名），
+ * 并提供 OpenAI 兼容 HTTP 接口——用 TS 重写实现风险太大，
+ * 因此 all2api 将其作为本地子进程驱动。
  */
 export interface BridgeHandle {
   baseUrl: string;
@@ -34,13 +34,12 @@ interface BridgeDataFile {
   [key: string]: unknown;
 }
 
-/** Placeholder == region id (see placeholderFor); kept here as doc only. */
+/** 占位符 == region id（见 placeholderFor）；此处仅作说明保留。 */
 
 /**
- * The sidecar binary is a build artifact, not source: it must never be
- * committed. On first start (fresh clone) it is compiled from the vendored
- * patched source in third_party/qoder2api — see that dir's VENDOR.md.
- * cn + intl bridges share one binary, so concurrent starts share one build.
+ * sidecar 二进制是构建产物而非源码：绝不能提交入库。首次启动时（全新克隆），
+ * 它由 third_party/qoder2api 中 vendored 的补丁源码编译而来——详见该目录的 VENDOR.md。
+ * cn 与 intl 桥接共用同一个二进制，因此并发启动时共用一次构建。
  */
 const sidecarBuilds = new Map<string, Promise<string>>();
 
@@ -55,7 +54,7 @@ async function ensureSidecarBinary(binary: string): Promise<string> {
 }
 
 async function buildSidecar(binary: string): Promise<string> {
-  // default layout: <root>/bridges/qoder2api[.exe] → <root>/third_party/qoder2api
+  // 默认布局：<root>/bridges/qoder2api[.exe] → <root>/third_party/qoder2api
   const sourceDir = resolve(dirname(binary), "..", "third_party", "qoder2api");
   if (!existsSync(sourceDir)) {
     throw new Error(
@@ -86,7 +85,7 @@ export async function startBridge(opts: {
   pat?: string;
   port: number;
   apiKey?: string;
-  /** "intl" runs the sidecar against the international (qoder.com) deployment. */
+  /** "intl" 表示将 sidecar 指向国际版（qoder.com）部署。 */
   region?: QoderRegion;
   timeoutMs?: number;
 }): Promise<BridgeHandle> {
@@ -96,7 +95,7 @@ export async function startBridge(opts: {
   const apiKey = opts.apiKey || `sk-bridge-${crypto.randomUUID().replaceAll("-", "")}`;
   const dataPath = resolve(opts.dataPath);
 
-  // Merge into an existing data.json so admin-panel edits and stats survive restarts.
+  // 合并到已有的 data.json，使管理后台的修改与统计在重启后保留。
   let data: Partial<BridgeDataFile> = {};
   if (existsSync(dataPath)) {
     try {
@@ -111,10 +110,9 @@ export async function startBridge(opts: {
   const region: QoderRegion = opts.region ?? "cn";
   if (pat) {
     data.pat = pat;
-    // A real PAT wins over any IDE identity left in data.json by an earlier
-    // no-PAT run (the Go side skips the PAT exchange whenever an identity is
-    // present). A placeholder is not a real PAT — it only clears the
-    // Go non-empty gate while the IDE identity does the actual auth.
+    // 真实 PAT 优先于此前无 PAT 运行残留在 data.json 中的 IDE 身份
+    //（Go 侧只要存在身份就会跳过 PAT 交换）。占位符不是真实 PAT——
+    // 它仅用于通过 Go 非空门槛校验，实际鉴权仍由 IDE 身份完成。
     const isPlaceholder = pat === placeholderFor(region);
     if (!isPlaceholder) {
       delete data.securityOauthToken;
@@ -124,9 +122,8 @@ export async function startBridge(opts: {
       delete data.expireTime;
     }
   } else {
-    // No PAT — reuse the desktop IDE's own login identity instead (cn and
-    // intl alike). Stale identity fields are dropped first so a dead login
-    // can never shadow a PAT later added via the sidecar admin panel.
+    // 无 PAT——改为复用桌面版 IDE 自身的登录身份（cn 与 intl 皆如此）。
+    // 先清除过期身份字段，以免失效登录遮挡后续在 sidecar 管理后台添加的 PAT。
     delete data.securityOauthToken;
     delete data.refreshToken;
     delete data.uid;
@@ -139,17 +136,15 @@ export async function startBridge(opts: {
       data.uid = ide.uid;
       data.nickname = ide.nickname;
       data.expireTime = ide.expireTime;
-      // Go builds no bridge for an empty PAT: the placeholder only clears
-      // that non-empty gate — the session still bootstraps purely from the
-      // IDE identity above, and no PAT exchange ever runs. A real PAT
-      // (config or admin panel) always replaces this marker. cn and intl
-      // alike (placeholder == region id, see placeholderFor).
+      // PAT 为空时 Go 不会建桥：占位符仅用于通过该非空门槛——
+      // 会话仍完全基于上述 IDE 身份启动，不会执行任何 PAT 交换。真实 PAT
+      //（config 或管理后台）总会替换此标记。cn 与 intl 皆如此
+      //（占位符 == region id，见 placeholderFor）。
       data.pat = placeholderFor(region);
       console.log(`[qoder-bridge] using ${region} IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"}) — 已复用本机 Qoder IDE 登录（config 里 ${region} pat 为空即走此 IDE 身份，有真实 PAT 则 PAT 优先）`);
     } else {
-      // Drop our own placeholder when the IDE login is gone — a stale marker
-      // must never masquerade as a PAT. A real PAT (e.g. from the sidecar
-      // admin panel) is left untouched so it takes effect.
+      // IDE 登录失效时清除我们自己的占位符——过期标记绝不能冒充 PAT。
+      // 真实 PAT（如来自 sidecar 管理后台）保持不动以便生效。
       if (data.pat === placeholderFor(region)) delete data.pat;
       const NO_IDE_WARN: Record<QoderRegion, string> = {
         intl:
@@ -197,7 +192,7 @@ export async function startBridge(opts: {
         if (health.status === "ok") break;
       }
     } catch {
-      // not up yet
+      // 尚未就绪
     }
     await new Promise((r) => setTimeout(r, 300));
   }

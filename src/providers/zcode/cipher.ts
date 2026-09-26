@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { homedir, platform, userInfo } from "node:os";
 
-// Port of ZCode CLI's credential cipher (zcode.cjs: createZCodeCredentialCipher).
-// Format: "enc:v1:" + base64url(iv) "." base64url(gcm-tag) "." base64url(ciphertext)
+// ZCode CLI 凭据加密器（credential cipher，zcode.cjs: createZCodeCredentialCipher）的移植。
+// 格式："enc:v1:" + base64url(iv) "." base64url(gcm-tag) "." base64url(ciphertext)
 const PREFIX = "enc:v1:";
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12;
@@ -16,7 +16,7 @@ export function resolveCredentialSecret(env: NodeJS.ProcessEnv = process.env): s
   try {
     username = userInfo().username;
   } catch {
-    // fall through with "unknown"
+    // 沿用 "unknown" 继续执行
   }
   return `zcode-credential-fallback:${platform()}:${homedir()}:${username}`;
 }

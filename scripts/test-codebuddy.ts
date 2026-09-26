@@ -1,6 +1,6 @@
 /**
- * Offline checks for the CodeBuddy/WorkBuddy provider pieces (no network):
- * envelope seal/open roundtrip + AAD byte layout, and OpenAI SSE aggregation.
+ * CodeBuddy/WorkBuddy provider 各部件的离线检查（无需联网）：
+ * 信封（envelope）密封/解封往返 + AAD 字节布局，以及 OpenAI SSE 聚合。
  */
 import { createHash, randomBytes } from "node:crypto";
 import { aggregateOpenAIStream } from "../src/translate/openai-aggregate.js";
@@ -15,7 +15,7 @@ function check(name: string, cond: boolean, detail?: string): void {
   }
 }
 
-// 1. AAD byte layout: "WB-AAD\0" + 0x01 + lp("WBEV1") + lp("sym-v1") + suite + lp(keyId) + [2,0,0]
+// 1. AAD 字节布局："WB-AAD\0" + 0x01 + lp("WBEV1") + lp("sym-v1") + suite + lp(keyId) + [2,0,0]
 const aad = buildAuthenticatedContextAad("0123456789abcdef", 1);
 const expected = Buffer.concat([
   Buffer.from("WB-AAD\0", "ascii"),
@@ -28,7 +28,7 @@ const expected = Buffer.concat([
 ]);
 check("AAD byte layout", aad.equals(expected), `got ${aad.toString("hex")}`);
 
-// 2. seal/open roundtrip with a derived key (same derivation as the real flow)
+// 2. 用派生密钥做密封/解封往返（与真实流程的派生方式相同）
 const secret = Buffer.from(randomBytes(32)).toString("base64");
 const key = createHash("sha256").update(secret, "utf8").digest();
 const keyId = createHash("sha256").update(key).digest("hex").slice(0, 16);
@@ -39,7 +39,7 @@ check("envelope parses back", envelope !== undefined && envelope.keyId === keyId
 check("seal -> open roundtrip", envelope !== undefined && openEnvelope(key, envelope) === "jwt-token-abc");
 check("open rejects wrong key", envelope !== undefined && openEnvelope(createHash("sha256").update("other", "utf8").digest(), envelope) === undefined);
 
-// 3. SSE aggregation: content + reasoning + tool_calls + usage + finish
+// 3. SSE 聚合：content + reasoning + tool_calls + usage + finish
 function sseOf(chunks: unknown[]): ReadableStream<Uint8Array> {
   const text = chunks
     .map((c) => (c === "DONE" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(c)}\n\n`))

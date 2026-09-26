@@ -1,6 +1,6 @@
 /**
- * Verifies CodeBuddy/WorkBuddy desktop credential decryption locally.
- * Prints a redacted summary only — never full tokens or key material.
+ * 在本地校验 CodeBuddy/WorkBuddy 桌面端凭据解密。
+ * 只打印脱敏摘要——从不打印完整 token 与密钥材料。
  */
 import { CodeBuddyCredentials } from "../src/providers/codebuddy/credentials.js";
 import { loadConfig } from "../src/config.js";

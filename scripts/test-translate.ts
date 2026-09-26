@@ -1,7 +1,7 @@
 /**
- * Offline checks for the Anthropic<->OpenAI translation layer (no network).
- * Feeds sample OpenAI SSE chunks through the stream translator and asserts the
- * emitted Anthropic events; also checks request and non-stream translations.
+ * Anthropic<->OpenAI 转译层的离线检查（无需联网）。
+ * 把示例 OpenAI SSE 分块送入流式转译器并断言产出的
+ * Anthropic 事件；同时检查请求与非流式转译。
  */
 import { anthropicToOpenAI, openAIToAnthropicResponse, translateOpenAIStreamToAnthropic } from "../src/translate/anthropic.js";
 
@@ -14,7 +14,7 @@ function check(name: string, cond: boolean, detail?: string): void {
   }
 }
 
-// 1. request translation
+// 1. 请求转译
 const openaiBody = anthropicToOpenAI({
   model: "GLM-5.3",
   system: "be terse",
@@ -44,7 +44,7 @@ check("assistant tool_use -> tool_calls", JSON.stringify(assistantMsg?.tool_call
 check("tool_result -> tool message", toolMsg?.tool_call_id === "toolu_1");
 check("tools mapped", Array.isArray(openaiBody.tools) && openaiBody.tools.length === 1);
 
-// 2. non-stream response translation
+// 2. 非流式响应转译
 const anthropicJson = openAIToAnthropicResponse(
   {
     id: "resp1",
@@ -69,7 +69,7 @@ check("tool_use parsed input", anthropicJson.content[2]?.type === "tool_use" && 
 check("stop_reason tool_use", anthropicJson.stop_reason === "tool_use");
 check("usage mapped", anthropicJson.usage["input_tokens"] === 11 && anthropicJson.usage["output_tokens"] === 7);
 
-// 3. stream translation
+// 3. 流式转译
 async function collectStream(stream: ReadableStream<Uint8Array>): Promise<string> {
   const decoder = new TextDecoder();
   let out = "";
@@ -114,7 +114,7 @@ check("input_json_delta joined", JSON.stringify(events.filter((e) => e.delta?.ty
 check("message_delta with tool_use", events.some((e) => e.type === "message_delta" && JSON.stringify(e).includes('"tool_use"')));
 check("ends with message_stop", events[events.length - 1]?.type === "message_stop");
 
-// block index sanity: each content_block_start has a unique index
+// 块序号自检：每个 content_block_start 的序号唯一
 const starts = events.filter((e) => e.type === "content_block_start");
 check("unique block indexes", new Set(starts.map((e) => e.index)).size === starts.length);
 

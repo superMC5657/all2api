@@ -26,7 +26,7 @@ const app = new Hono();
 
 app.use("*", cors());
 
-// all2api's own Bearer auth (clients authenticate with cfg.apiKey, not the upstream keys)
+// all2api 自身的 Bearer 鉴权（客户端用 cfg.apiKey 鉴权，而非上游密钥）
 app.use("/v1/*", async (c, next) => {
   const auth = c.req.header("authorization") ?? "";
   if (auth !== `Bearer ${cfg.apiKey}`) {
@@ -38,8 +38,8 @@ app.use("/v1/*", async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true, providers: providers.map((p) => p.id) }));
 
 app.get("/v1/models", async (c) => {
-  // every entry is listed in the canonical "provider/model" form; bare ids
-  // still route to the default provider for backward compatibility
+  // 每个条目都以规范的 "provider/model" 形式列出；裸 ID
+  // 为向后兼容仍路由到默认 provider
   const data = (
     await Promise.all(
       providers.map(async (p) =>

@@ -1,7 +1,7 @@
 /**
- * Cross-platform sidecar build: outputs `bridges/qoder2api` on Linux/macOS
- * and `bridges/qoder2api.exe` on Windows. Keeps the platform conditional in
- * one place instead of hardcoding `.exe` in the npm script.
+ * 跨平台 sidecar 构建：在 Linux/macOS 输出 `bridges/qoder2api`，
+ * 在 Windows 输出 `bridges/qoder2api.exe`。把平台条件收敛在一处，
+ * 而不在 npm script 里硬编码 `.exe`。
  */
 import { execFileSync } from "node:child_process";
 

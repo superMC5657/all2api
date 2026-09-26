@@ -1,7 +1,7 @@
 /**
- * Aggregates an OpenAI SSE stream into a single chat.completion object.
- * Needed because some upstreams (CodeBuddy/WorkBuddy gateway) only serve
- * streaming responses while clients still ask for non-stream ones.
+ * 将 OpenAI SSE（服务端推送事件流）聚合成单个 chat.completion（聊天补全）对象。
+ * 适用于部分上游（CodeBuddy/WorkBuddy 网关）仅提供 streaming（流式）响应，
+ * 而客户端仍请求非流式响应的场景。
  */
 
 export interface AggregatedResponse {

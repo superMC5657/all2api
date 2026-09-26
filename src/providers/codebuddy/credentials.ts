@@ -5,24 +5,21 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
- * CodeBuddy / WorkBuddy (Tencent) desktop credential handling.
+ * CodeBuddy / WorkBuddy（腾讯）桌面端凭据处理。
  *
- * The desktop app stores one JSON auth file per account under
- * CodeBuddyExtension/Data/Public/auth/*.info. Since WorkBuddy 5.6 the
- * accessToken/refreshToken fields are wrapped as {$wbEncrypted:1, envelope}
- * (AES-256-GCM). The key never lives in the file: it is fetched at runtime
- * from the app's own Electron binary, whose private `workbuddyStorage`
- * binding exposes {version:1, atRestSecretKey} when run with
- * ELECTRON_RUN_AS_NODE=1. Everything below was verified live against 5.6.2
- * (Windows + macOS, see README appendix and dsh-workbuddy-connect for the
- * original transcription).
+ * 桌面应用在 CodeBuddyExtension/Data/Public/auth/*.info 下为每个账号保存一个 JSON auth 文件。
+ * 自 WorkBuddy 5.6 起，accessToken/refreshToken 字段被封装为 {$wbEncrypted:1, envelope}
+ * 形式（AES-256-GCM）。密钥从不存放在文件中，而是在运行时从应用自身的 Electron
+ * 二进制文件中获取：其私有 `workbuddyStorage` 绑定在以 ELECTRON_RUN_AS_NODE=1
+ * 运行时会暴露 {version:1, atRestSecretKey}。以下全部逻辑已针对 5.6.2
+ * 实机验证通过（Windows + macOS，详见 README 附录与 dsh-workbuddy-connect 中的原始记录）。
  */
 
 const BACKEND = "https://copilot.tencent.com";
 const DEFAULT_DOMAIN = "www.codebuddy.cn";
 const REFRESH_MARGIN_MS = 60_000;
 
-// ---------- envelope crypto ----------
+// ---------- 信封（envelope）加解密 ----------
 
 export interface WorkBuddyEnvelope {
   suite: number;
@@ -32,7 +29,7 @@ export interface WorkBuddyEnvelope {
   ciphertext: Buffer;
 }
 
-/** Authenticated-context AAD for suite-1 field envelopes (WBEV1 framing). */
+/** suite-1 字段信封（envelope）的认证上下文 AAD（WBEV1 帧格式）。 */
 export function buildAuthenticatedContextAad(keyId: string, suite: number): Buffer {
   const lengthPrefixed = (value: string): Buffer => {
     const bytes = Buffer.from(value, "utf8");
@@ -87,7 +84,7 @@ export function openEnvelope(key: Buffer, envelope: WorkBuddyEnvelope): string |
   }
 }
 
-/** Seal a field back in the exact format the desktop app writes (suite 1). */
+/** 按桌面端写入的精确格式重新密封（seal）字段（suite 1）。 */
 export function sealField(key: Buffer, keyId: string, plaintext: string): { $wbEncrypted: 1; envelope: string } {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
@@ -103,7 +100,7 @@ export function sealField(key: Buffer, keyId: string, plaintext: string): { $wbE
   return { $wbEncrypted: 1, envelope: Buffer.from(JSON.stringify(inner), "utf8").toString("base64") };
 }
 
-// ---------- at-rest key extraction (spawns the app's own Electron) ----------
+// ---------- 静态密钥提取（会拉起应用自身的 Electron） ----------
 
 const HELPER_SCRIPT = 'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))';
 
@@ -132,13 +129,13 @@ async function electronFromWindowsRegistry(): Promise<string | undefined> {
       const exe = value.split(",")[0]?.trim();
       if (exe && existsSync(exe)) return exe;
     } catch {
-      // registry unreadable — try next hive
+      // 注册表不可读——尝试下一个 hive
     }
   }
   return undefined;
 }
 
-/** Locate the WorkBuddy desktop Electron binary. */
+/** 定位 WorkBuddy 桌面端 Electron 二进制文件。 */
 export async function findWorkBuddyElectron(configured?: string): Promise<string> {
   const envPath = process.env["WORKBUDDY_ELECTRON_BIN"]?.trim() || undefined;
   const platformDefault =
@@ -166,9 +163,8 @@ export interface AtRestKey {
 }
 
 /**
- * Resolves and caches the at-rest protector key. One Electron spawn per
- * process per resolved key; re-resolved only when an envelope names another
- * key id (key rotation).
+ * 解析并缓存静态保护密钥（at-rest protector key）。每个进程对每个已解析密钥只拉起一次
+ * Electron；仅当信封（envelope）中出现另一个密钥 ID（key rotation，密钥轮换）时才重新解析。
  */
 export class AtRestKeyProvider {
   private inflight: Promise<AtRestKey> | undefined;
@@ -220,7 +216,7 @@ export class AtRestKeyProvider {
   }
 }
 
-// ---------- auth document ----------
+// ---------- auth 文档 ----------
 
 export interface CodeBuddyAccount {
   uid?: string;
@@ -253,7 +249,7 @@ export class CodeBuddyCredentials {
     this.keyProvider = new AtRestKeyProvider(electronPath);
   }
 
-  /** First *.info file in the auth dir (platform default when not configured). */
+  /** auth 目录下的第一个 *.info 文件（未配置时使用各平台默认值）。 */
   authFile(): string {
     const dir =
       this.authDir ??
@@ -282,7 +278,7 @@ export class CodeBuddyCredentials {
     return this.cached;
   }
 
-  /** Decrypt (when needed) and return the current account + token fields. */
+  /** 按需解密并返回当前账号与 token 字段。 */
   async get(): Promise<CodeBuddyAuth> {
     const { doc } = this.load();
     if (this.decrypted) return this.decrypted;
@@ -321,7 +317,7 @@ export class CodeBuddyCredentials {
     return creds.expiresAt > 0 && Date.now() >= creds.expiresAt - REFRESH_MARGIN_MS;
   }
 
-  /** Backend request headers; refreshes the token first when near expiry. */
+  /** 后端请求头；接近过期时先刷新 token。 */
   async headers(): Promise<Record<string, string>> {
     let creds = await this.get();
     if (this.isExpired(creds)) await this.refresh();
@@ -338,7 +334,7 @@ export class CodeBuddyCredentials {
     };
   }
 
-  /** Force a refresh (used on 401 retries). Single-flight. */
+  /** 强制刷新（用于 401 重试）。单飞（Single-flight）防并发。 */
   async refresh(): Promise<void> {
     this.inflightRefresh ??= this.doRefresh().finally(() => {
       this.inflightRefresh = undefined;
@@ -373,7 +369,7 @@ export class CodeBuddyCredentials {
     this.writeBack(json.data);
   }
 
-  /** Merge refresh response into the auth doc and write it back in its original shape. */
+  /** 将刷新响应合并到 auth 文档并按原始结构写回。 */
   private async writeBack(newAuth: Record<string, unknown>): Promise<void> {
     const file = this.authFile();
     const { doc, mtime } = this.load();
@@ -392,8 +388,8 @@ export class CodeBuddyCredentials {
       merged["refreshExpiresAt"] = now + Number(newAuth["refreshExpiresIn"]) * 1000;
     }
 
-    // Re-seal whatever fields were encrypted originally, under the current key
-    // (already resolved during get(), so forKey returns from cache).
+    // 用当前密钥重新密封（re-seal）原本加密过的字段
+    //（get() 期间已解析过密钥，因此 forKey 会命中缓存）。
     const sealed: Record<string, unknown> = { ...merged };
     for (const field of ["accessToken", "refreshToken"] as const) {
       const original = auth[field];

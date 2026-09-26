@@ -16,7 +16,7 @@ export async function forwardCompletion(c: Context, kind: "openai" | "anthropic"
   try {
     requestedModel = (JSON.parse(rawBody) as { model?: string }).model ?? "";
   } catch {
-    // fall through — empty model yields 400 below
+    // 透传——空模型下面会返回 400
   }
   if (!requestedModel) {
     return c.json({ error: { message: "request body must be JSON with a \"model\" field", type: "invalid_request_error" } }, 400);

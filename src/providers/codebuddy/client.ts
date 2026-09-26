@@ -7,13 +7,12 @@ import type { CodeBuddyProviderConfig } from "../../config.js";
 import { CodeBuddyCredentials } from "./credentials.js";
 
 /**
- * CodeBuddy / WorkBuddy (Tencent) provider — direct connection to
- * copilot.tencent.com. The gateway speaks the OpenAI chat protocol with
- * native tools, but only serves streaming responses, so:
- *   - client wants stream   -> SSE passthrough (OpenAI) or translated SSE (Anthropic)
- *   - client wants non-stream -> upstream SSE aggregated locally
- * Token expiry is handled by the credentials module (auto refresh + write-back);
- * a 401 triggers one forced refresh + retry.
+ * CodeBuddy / WorkBuddy（腾讯）provider——直连 copilot.tencent.com。
+ * 网关使用 OpenAI chat 协议并支持原生 tools，但只提供流式（streaming）响应，因此：
+ *   - 客户端要流式   -> SSE 透传（OpenAI）或转译后的 SSE（Anthropic）
+ *   - 客户端要非流式 -> 在本地聚合上游 SSE
+ * Token 过期由 credentials 模块处理（自动刷新 + 写回）；
+ * 遇到 401 会触发一次强制刷新 + 重试。
  */
 export class CodeBuddyProvider implements ProviderAdapter {
   readonly id = "codebuddy";
@@ -35,7 +34,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
     const body = JSON.parse(rewriteModel(rawBody, model)) as Record<string, unknown>;
     const clientWantsStream = body["stream"] === true;
-    // the gateway only serves streaming responses
+    // 网关只提供流式响应
     body["stream"] = true;
     if (!body["stream_options"]) body["stream_options"] = { include_usage: true };
     sanitizeToolChoice(body);
@@ -97,11 +96,11 @@ export class CodeBuddyProvider implements ProviderAdapter {
 }
 
 /**
- * The gateway's tool_choice is a plain string field ("auto"/"none"/"required");
- * object forms that OpenAI/Anthropic clients send are rejected with a 400
- * (code 11101, "cannot unmarshal object into ... tool_choice of type string").
- * Named-function forcing is not supported upstream, so it degrades to
- * "required" — the model still sees the tools and picks one.
+ * 网关的 tool_choice 是纯字符串字段（"auto"/"none"/"required"）；
+ * OpenAI/Anthropic 客户端发送的对象形式会被 400 拒绝
+ *（code 11101，"cannot unmarshal object into ... tool_choice of type string"）。
+ * 上游不支持按名称强制调用函数（Named-function forcing），因此降级为
+ * "required"——模型仍能看到 tools 并自行选择其一。
  */
 function sanitizeToolChoice(body: Record<string, unknown>): void {
   const choice = body["tool_choice"];

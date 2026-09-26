@@ -12,7 +12,7 @@ export interface UsageEntry {
 
 export function logUsage(entry: UsageEntry): void {
   appendFile(joinUsage(), JSON.stringify(entry) + "\n").catch(() => {
-    // never let logging break a request
+    // 日志绝不能影响正常请求
   });
 }
 

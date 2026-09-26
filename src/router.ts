@@ -6,8 +6,8 @@ export interface RouteTarget {
 }
 
 /**
- * Routes a model id to a provider. "zcode/glm-5.3-flash" pins the provider;
- * a bare model id goes to the default provider.
+ * 将模型 ID 路由到 provider。"zcode/glm-5.3-flash" 会 pin 住指定 provider；
+ * 裸模型 ID 则走默认 provider。
  */
 export function routeModel(model: string, providers: ProviderAdapter[], defaultProviderId: string): RouteTarget {
   const slash = model.indexOf("/");

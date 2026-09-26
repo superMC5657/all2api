@@ -6,22 +6,21 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 /**
- * Shared keystore base for the Qoder desktop IDE readers (intl + CN).
+ * Qoder 桌面版 IDE 读取器（intl + CN）共用的 keystore 基础。
  *
- * Both flavors reuse the same Electron/Chromium OSCrypt envelope and differ
- * only in their data sources (file paths, sqlite keys, field maps, region):
- *   - intl: win32 DPAPI + state.vscdb + AES-256-GCM ("v10")
- *   - cn:   Linux gnome-keyring + auth.v1.dat + AES-128-CBC ("v11"),
- *           plus best-effort win32 candidate probing (DPAPI "v10" /
- *           PBKDF2 "v11" per file)
+ * 两种风味复用相同的 Electron/Chromium OSCrypt 信封，仅数据源不同
+ *（文件路径、sqlite 键、字段映射、region）：
+ *   - intl：win32 DPAPI + state.vscdb + AES-256-GCM（"v10"）
+ *   - cn：Linux gnome-keyring + auth.v1.dat + AES-128-CBC（"v11"），
+ *          另加尽力而为的 win32 候选探测（按文件区分 DPAPI "v10" /
+ *          PBKDF2 "v11"）
  *
- * The intl/CN source tables below own the data source definitions; the
- * shared engine in this file handles probing + decryption for both.
+ * 下方的 intl/CN 来源表拥有数据源定义；本文件的共享引擎同时处理
+ * 两者的探测与解密。
  *
- * Redaction contract (diagnostics and probes): only existence, key length in
- * bytes, 3-byte prefixes, JSON field names, truncated error messages, and
- * token prefixes + lengths are ever surfaced — never secret values, keys,
- * or full tokens.
+ * 脱敏约定（诊断与探测）：仅暴露存在性、密钥字节长度、3 字节前缀、
+ * JSON 字段名、截断后的错误信息以及 token 前缀与长度——绝不暴露密钥值、
+ * 密钥本身或完整 token。
  */
 
 // ---------------------------------------------------------------------------
@@ -29,38 +28,37 @@ import { DatabaseSync } from "node:sqlite";
 // ---------------------------------------------------------------------------
 
 export interface QoderIdeIdentity {
-  /** dt-… access token — used as a plain Bearer against the gateway. */
+  /** dt-… 访问令牌——直接作为 Bearer 向网关鉴权。 */
   token: string;
   refreshToken: string;
   uid: string;
   nickname: string;
-  /** Epoch ms; 0 when unknown. */
+  /** Epoch 毫秒时间戳；未知时为 0。 */
   expireTime: number;
 }
 
-/** Chromium OSCrypt payload prefixes: "v10" (AES-256-GCM) / "v11" (AES-128-CBC). */
+/** Chromium OSCrypt 负载前缀："v10"（AES-256-GCM）/ "v11"（AES-128-CBC）。 */
 export type OsCryptPrefix = "v10" | "v11";
 
-/** One decrypt candidate: a file path plus its reader (missing file / throw counts as a miss). */
+/** 一个解密候选：文件路径加其读取器（文件缺失 / 抛错均视为未命中）。 */
 export interface KeystoreCandidate<T> {
-  /** Probed file path — recorded into `tried` (paths only, never content). */
+  /** 已探测的文件路径——记入 `tried`（仅路径，绝不含内容）。 */
   path: string;
   read: () => T | null;
 }
 
-/** Where the encrypted blob lives. */
+/** 加密二进制的存放位置。 */
 export type QoderIdeContainer = "sqlite-item" | "dat-file";
-/** Chromium OSCrypt envelope: v10 → AES-256-GCM, v11 → AES-128-CBC. */
+/** Chromium OSCrypt 信封：v10 → AES-256-GCM，v11 → AES-128-CBC。 */
 export type QoderIdeScheme = "v10-gcm" | "v11-cbc";
-/** Where the decryption key/password comes from. */
+/** 解密密钥 / 口令的来源。 */
 export type QoderIdeKeySource = "local-state-dpapi" | "gnome-keyring" | "env-password";
 
 /**
- * Per-shape field extraction (the "fieldMap"): token/refresh are always the
- * top-level `token` / `refreshToken` strings; uid/nickname/expire differ per
- * flavor (intl flat `id`/`name`/`expireTime` vs CN `user:{id,name}` +
- * `expiresAt`), so each table entry carries its own extractors and the
- * engine never branches on shape.
+ * 按形状提取字段（即 "fieldMap"）：token/refresh 恒为顶层 `token` /
+ * `refreshToken` 字符串；uid/nickname/expire 随风味而异
+ *（intl 扁平 `id`/`name`/`expireTime`，对比 CN `user:{id,name}` +
+ * `expiresAt`），因此每个表项自带提取器，引擎无需按形状分支。
  */
 export interface QoderIdeFieldMap {
   uid(doc: Record<string, unknown>, user: Record<string, unknown>): string;
@@ -68,45 +66,45 @@ export interface QoderIdeFieldMap {
   expireTime(doc: Record<string, unknown>): number;
 }
 
-/** One decryptable data source: everything the engine needs, as data. */
+/** 一个可解密数据源：引擎所需的一切，均以数据形式给出。 */
 export interface QoderIdeSource {
-  /** Stable id for debugging (never a secret). */
+  /** 用于调试的稳定 id（绝非密钥）。 */
   id: string;
   region: "intl" | "cn";
   platform: "win32" | "linux";
-  /** User-data / config dir: DPAPI `Local State` lives here; also the probe root. */
+  /** 用户数据 / 配置目录：DPAPI 的 `Local State` 在此；同时也是探测根目录。 */
   root: string;
-  /** Absolute file to read (sqlite db or .dat). Resolved from roots[] by the table builders. */
+  /** 待读取的绝对路径文件（sqlite 库或 .dat）。由表构建器从 roots[] 解析得到。 */
   file: string;
   container: QoderIdeContainer;
-  /** sqlite ItemTable key (sqlite-item only). */
+  /** sqlite ItemTable 键（仅 sqlite-item）。 */
   itemKey?: string;
-  /** Envelope(s) to try, in order (auth.v1.dat tries v10 then v11). */
+  /** 待尝试的信封（按序，auth.v1.dat 先试 v10 再试 v11）。 */
   scheme: QoderIdeScheme | QoderIdeScheme[];
-  /** Key source(s), parallel to scheme when given as an array. */
+  /** 密钥来源；为数组时与 scheme 一一对应。 */
   keySource: QoderIdeKeySource | QoderIdeKeySource[];
-  /** DPAPI temp-file infix (intl "" vs cn "-cn"). */
+  /** DPAPI 临时文件中缀（intl 为 ""，cn 为 "-cn"）。 */
   tmpInfix?: string;
-  /** Password provider for v11-cbc (gnome-keyring fetcher / env override). */
+  /** v11-cbc 的口令提供器（gnome-keyring 获取器 / 环境变量覆盖）。 */
   getPassword?: () => string | null;
   fieldMap: QoderIdeFieldMap;
-  /** Probe grouping (state.vscdb vs auth.v1.dat). */
+  /** 探测分组（state.vscdb 对 auth.v1.dat）。 */
   probeKind: "state.vscdb" | "auth.v1.dat";
 }
 
-/** Redacted per-file attempt: metadata only, never secret material. */
+/** 脱敏的单文件尝试记录：仅元数据，绝不含密钥材料。 */
 export interface QoderIdeFileProbe {
   kind: "state.vscdb" | "auth.v1.dat";
   path: string;
   exists: boolean;
-  /** "v10" / "v11" / other 3-byte prefix, when the file could be read. */
+  /** 文件可读时的 3 字节前缀："v10" / "v11" / 其他。 */
   prefix?: string;
-  /** sqlite key present (sqlite-item only). */
+  /** sqlite 键是否存在（仅 sqlite-item）。 */
   keyPresent?: boolean;
-  /** Decrypted AES key length in bytes (never the key itself). */
+  /** 解密后 AES 密钥的字节长度（绝非密钥本身）。 */
   keyLength?: number;
   decrypted: boolean;
-  /** Top-level JSON field names of the decrypted doc (never values). */
+  /** 解密文档的顶层 JSON 字段名（绝非字段值）。 */
   fields?: string[];
   error?: string;
 }
@@ -115,17 +113,17 @@ export interface QoderIdeFileProbe {
 // keystore 原语
 // ---------------------------------------------------------------------------
 
-/** First 3 bytes of an OSCrypt blob as text (e.g. "v10" / "v11"); metadata only, never secret material. */
+/** OSCrypt 二进制前 3 字节的文本形式（如 "v10" / "v11"）；仅元数据，绝非密钥材料。 */
 export function osCryptPrefix(blob: Buffer): string {
   return blob.slice(0, 3).toString();
 }
 
-/** True when the blob carries the expected OSCrypt prefix. */
+/** 当二进制带有预期的 OSCrypt 前缀时为 true。 */
 export function hasOsCryptPrefix(blob: Buffer, prefix: OsCryptPrefix): boolean {
   return osCryptPrefix(blob) === prefix;
 }
 
-/** "v10" payload → AES-256-GCM (nonce 12B | ciphertext | tag 16B). */
+/** "v10" 负载 → AES-256-GCM（nonce 12 字节 | 密文 | tag 16 字节）。 */
 export function aesGcmDecrypt(data: Buffer, key: Buffer): string {
   const nonce = data.slice(0, 12);
   const tag = data.slice(data.length - 16);
@@ -135,20 +133,20 @@ export function aesGcmDecrypt(data: Buffer, key: Buffer): string {
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
 
-/** Chromium Linux OSCrypt "v11": PBKDF2-SHA1 key + AES-128-CBC with a fixed space IV. */
+/** Chromium Linux OSCrypt "v11"：PBKDF2-SHA1 密钥 + AES-128-CBC，IV 为固定空格。 */
 export function aesCbcDecrypt(data: Buffer, password: string): string {
   const key = pbkdf2Sync(password, "saltysalt", 1, 16, "sha1");
-  // autoPadding (default true) already strips PKCS#7 — no manual unpad step.
+  // autoPadding（默认 true）已自动去除 PKCS#7 填充——无需手动解填充。
   const decipher = createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, " "));
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
 }
 
 /**
- * DPAPI-unwrap of `<userDataDir>/Local State` → os_crypt.encrypted_key.
- * Only opens for the same Windows user that ran the IDE.
+ * 对 `<userDataDir>/Local State` → os_crypt.encrypted_key 做 DPAPI 解包。
+ * 仅以运行过该 IDE 的同一 Windows 用户身份才能打开。
  *
- * @param tmpInfix keeps transient temp names distinct per caller
- *   (intl "" → all2api-qkey.bin/.key, cn "-cn" → all2api-qkey-cn.bin/.key).
+ * @param tmpInfix 使各调用方的临时文件名互不相同
+ *  （intl "" → all2api-qkey.bin/.key，cn "-cn" → all2api-qkey-cn.bin/.key）。
  */
 export function readWin32OsCryptKey(userDataDir: string, tmpInfix = ""): Buffer {
   const ls = JSON.parse(readFileSync(join(userDataDir, "Local State"), "utf8")) as {
@@ -176,22 +174,22 @@ export function readWin32OsCryptKey(userDataDir: string, tmpInfix = ""): Buffer 
     if (ps.status !== 0) throw new Error("DPAPI unlock failed: " + String(ps.stderr).slice(0, 200));
     return readFileSync(tmpKey);
   } finally {
-    // transient key material never outlives this call
+    // 临时密钥材料绝不活过本次调用
     for (const f of [tmpBlob, tmpKey]) {
       try {
         unlinkSync(f);
       } catch {
-        // best-effort cleanup
+        // 尽力清理
       }
     }
   }
 }
 
 /**
- * Candidate probing ("firstExisting"): exist → try → next on failure.
- * Returns the first non-null hit, or null when nothing opens. Every probed
- * path is appended to `tried` so callers can warn once with the tried paths
- * (paths only, never content) on total failure.
+ * 候选探测（"firstExisting"）：存在才试、失败换下一个。
+ * 返回首个非空命中，全部打不开则返回 null。每个探测过的路径都会追加到
+ * `tried`，以便调用方在彻底失败时一次性告警已试路径
+ *（仅路径，绝不含内容）。
  */
 export function firstExisting<T>(candidates: KeystoreCandidate<T>[], tried: string[] = []): T | null {
   for (const candidate of candidates) {
@@ -201,45 +199,43 @@ export function firstExisting<T>(candidates: KeystoreCandidate<T>[], tried: stri
       const hit = candidate.read();
       if (hit) return hit;
     } catch {
-      // next candidate
+      // 换下一个候选
     }
   }
   return null;
 }
 
-/** Redacted probe error: message only, truncated — never secret material. */
+/** 脱敏的探测错误：仅消息且截断——绝不含密钥材料。 */
 export function truncateProbeError(err: unknown, max = 200): string {
   return String((err as Error)?.message ?? err).slice(0, max);
 }
 
-/** Top-level JSON field names of a decrypted doc (never values). */
+/** 解密文档的顶层 JSON 字段名（绝非字段值）。 */
 export function decryptedFieldNames(doc: Record<string, unknown>): string[] {
   return Object.keys(doc);
 }
 
 // ---------------------------------------------------------------------------
-// 引擎 ("按表取钥")
+// 引擎（"按表取钥"）
 //
-// Extracts the international Qoder IDE's own login identity from its local
-// store, so all2api can reuse the desktop login without any interactive
-// token creation.
+// 从本地存储提取国际版 Qoder IDE 自身的登录身份，
+// 使 all2api 无需任何交互式 token 创建即可复用桌面端登录。
 //
-// Data source (this adapter owns it): %APPDATA%/Qoder/User/globalStorage/
-// state.vscdb under `secret://aicoding.auth.userInfo`, encrypted with the
-// Electron safeStorage (Chromium OSCrypt) scheme: "v10" prefix + AES-256-GCM,
-// where the AES key itself sits DPAPI-protected in `Local State` →
-// os_crypt.encrypted_key. Everything only opens for the same Windows user
-// that ran the IDE. Probing + decryption live in the keystore section below.
+// 数据源（归本适配器所有）：%APPDATA%/Qoder/User/globalStorage/ 下的
+// state.vscdb，以 `secret://aicoding.auth.userInfo` 为键，采用
+// Electron safeStorage（Chromium OSCrypt）方案加密："v10" 前缀 + AES-256-GCM，
+// 其中 AES 密钥本身经 DPAPI 保护存于 `Local State` →
+// os_crypt.encrypted_key。仅以运行过该 IDE 的同一 Windows 用户身份才能打开。
+// 探测与解密逻辑见下方的 keystore 部分。
 //
-// This file also owns the shared table-driven engine: every adapter (intl +
-// CN) is a data table (QoderIdeSource entries) plus one engine call. The
-// engine is the only place with an existence → try → next loop; all five
-// observed source differences (roots, container, scheme, key source, field
-// shape) are expressed as entry data, never as engine branches.
+// 本文件同时拥有共享的表驱动引擎：每个适配器（intl + CN）都是一张数据表
+//（QoderIdeSource 表项）加一次引擎调用。引擎是唯一存在“存在才试、失败换下
+// 一个”循环的地方；观察到的五处来源差异（roots、container、scheme、密钥来源、
+// 字段形状）均表达为表项数据，绝不在引擎中分支。
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Data-source description table + engine ("按表取钥")
+// 数据源描述表 + 引擎（"按表取钥"）
 // ---------------------------------------------------------------------------
 
 function schemesOf(source: QoderIdeSource): QoderIdeScheme[] {
@@ -277,11 +273,11 @@ function loadPassword(source: QoderIdeSource, keySource: QoderIdeKeySource): str
 }
 
 /**
- * Shared prefix/key/decrypt/parse loop for both containers (sqlite-item +
- * dat-file): prefix match (in scheme order) → key → decrypt → fieldMap
- * parse. Mutates `probe` (prefix/keyLength/fields/decrypted/error) and
- * returns the engine result shape. Containers only fetch the blob; all
- * key/decrypt/error strings live here verbatim.
+ * 两种容器（sqlite-item + dat-file）共用的前缀 / 密钥 / 解密 / 解析循环：
+ * 前缀匹配（按 scheme 顺序）→ 取密钥 → 解密 → fieldMap 解析。
+ * 会修改 `probe`（prefix/keyLength/fields/decrypted/error），
+ * 并返回引擎结果形状。容器只负责取二进制；所有密钥 / 解密 / 错误字符串
+ * 均原文保留在此。
  */
 function decryptBlobForScheme(
   blob: Buffer,
@@ -314,7 +310,7 @@ function decryptBlobForScheme(
           : "os_crypt password unavailable";
       return { probe, identity: null };
     }
-    if (scheme === "v11-cbc") probe.keyLength = 16; // PBKDF2-SHA1("saltysalt",1) → AES-128
+    if (scheme === "v11-cbc") probe.keyLength = 16; // PBKDF2-SHA1("saltysalt",1) 派生 → AES-128
     const plain = aesCbcDecrypt(blob.slice(3), password);
     const doc = JSON.parse(plain) as Record<string, unknown>;
     probe.fields = decryptedFieldNames(doc);
@@ -327,10 +323,10 @@ function decryptBlobForScheme(
 }
 
 /**
- * Single-source attempt: existence → prefix match (in scheme order) → key →
- * decrypt → fieldMap parse. Never throws; failures are encoded as
- * `{ probe, identity: null }` so the engine (and the win32 probes) can move
- * on to the next entry. Probe strings mirror the pre-table helpers verbatim.
+ * 单数据源尝试：存在性 → 前缀匹配（按 scheme 顺序）→ 取密钥 →
+ * 解密 → fieldMap 解析。绝不抛错；失败编码为
+ * `{ probe, identity: null }`，以便引擎（及 win32 探测）继续处理下一表项。
+ * 探测字符串与建表前的辅助函数保持原文一致。
  */
 export function tryQoderIdeSource(source: QoderIdeSource): {
   probe: QoderIdeFileProbe;
@@ -381,9 +377,9 @@ export function tryQoderIdeSource(source: QoderIdeSource): {
 }
 
 /**
- * Table engine ("存在才试、失败下一个"): probe entries in order, return the
- * first successful identity. Every probed file is appended to `tried` (paths
- * only, never content) so callers can warn once with the tried paths.
+ * 表引擎（"存在才试、失败下一个"）：按序探测表项，返回首个成功的身份。
+ * 每个探测过的文件都会追加到 `tried`（仅路径，绝不含内容），
+ * 以便调用方一次性告警已试路径。
  */
 export function runQoderIdeSources(entries: QoderIdeSource[], tried: string[] = []): QoderIdeIdentity | null {
   for (const entry of entries) {
@@ -392,17 +388,17 @@ export function runQoderIdeSources(entries: QoderIdeSource[], tried: string[] = 
       const { identity } = tryQoderIdeSource(entry);
       if (identity) return identity;
     } catch {
-      // next candidate
+      // 换下一个候选
     }
   }
   return null;
 }
 
 // ---------------------------------------------------------------------------
-// intl 表 (single source) + one engine call
+// intl 表（单数据源）+ 一次引擎调用
 // ---------------------------------------------------------------------------
 
-/** sqlite key holding the intl auth document inside state.vscdb. */
+/** state.vscdb 中保存 intl 鉴权文档的 sqlite 键。 */
 const INTL_STATE_KEY = "secret://aicoding.auth.userInfo";
 
 /** 统一 fieldMap：见下方 QODER_FIELD_MAP（覆盖 intl 扁平形与 CN user/expiresAt 形）。 */
@@ -429,7 +425,7 @@ function intlEntries(ideDataDir?: string): QoderIdeSource[] {
 }
 
 export function readQoderIdeIdentity(ideDataDir?: string): QoderIdeIdentity | null {
-  if (process.platform !== "win32") return null; // DPAPI-based; other platforms need different key stores
+  if (process.platform !== "win32") return null; // 基于 DPAPI；其他平台需不同密钥存储
   try {
     return runQoderIdeSources(intlEntries(ideDataDir));
   } catch {
@@ -440,49 +436,49 @@ export function readQoderIdeIdentity(ideDataDir?: string): QoderIdeIdentity | nu
 // ---------------------------------------------------------------------------
 // cn 表
 //
-// Extracts the domestic (CN) Qoder IDE's own login identity from its local
-// store, so all2api can reuse the desktop login without any PAT.
+// 从本地存储提取国内版（CN）Qoder IDE 自身的登录身份，
+// 使 all2api 无需任何 PAT 即可复用桌面端登录。
 //
-// Data sources (this adapter owns them):
-// - Linux: ~/.config/com.qodercn.app.stable/auth.v1.dat —
+// 数据源（归本适配器所有）：
+// - Linux：~/.config/com.qodercn.app.stable/auth.v1.dat——
 //   {"token":"dt-…","refreshToken":"drt-…","user":{…},"expiresAt":"…",…}
-//   encrypted with the Chromium-on-Linux OSCrypt scheme: a "v11" prefix +
-//   AES-128-CBC (IV = 16 spaces), where the 128-bit key is
-//   PBKDF2-HMAC-SHA1(password, salt "saltysalt", 1 iteration) of the
-//   "Qoder CN App" entry (chrome_libsecret_os_crypt_password_v2) in the
-//   user's gnome-keyring. Everything only opens for the same Linux user
-//   that ran the IDE (keyring auto-unlocked at login).
-// - Windows (win32, UNVERIFIED — no Windows machine available here, see
-//   scripts/qoder-cn-decrypt.ts): best-effort candidate probing of Qoder's
-//   own auth.v1.dat only. cn 只读 Qoder 自家落盘；CodeBuddy 系因跨厂商不可互认，已移除。
-//   The exact on-disk layout of the domestic IDE on Windows is unconfirmed,
-//   so nothing is asserted as a single fixed path — every candidate is tried
-//   only if it exists (exist → try → next on failure), and a final failure
-//   warns once listing the tried paths (paths only, never content).
-//   Priority: explicit authFile param (= caller config override) →
-//   QODER_CN_APPDATA env → %APPDATA%/Qoder CN →
-//   %LOCALAPPDATA% variants → com.qodercn.app.* dirs. Per candidate only
-//   auth.v1.dat is tried: v10 prefix → DPAPI (os_crypt.encrypted_key in
-//   sibling Local State); v11 prefix → PBKDF2 only with an explicit
-//   QODER_CN_OS_CRYPT_PASSWORD override (Linux reads the password from
-//   gnome-keyring, which has no win32 equivalent here — never a hardcoded
-//   password, report via the decrypt script instead).
+//   采用 Chromium-on-Linux OSCrypt 方案加密："v11" 前缀 +
+//   AES-128-CBC（IV 为 16 个空格），其中 128 位密钥为用户
+//   gnome-keyring 中 "Qoder CN App" 条目
+//  （chrome_libsecret_os_crypt_password_v2）的
+//   PBKDF2-HMAC-SHA1（口令，盐 "saltysalt"，迭代 1 次）派生。
+//   仅以运行过该 IDE 的同一 Linux 用户身份才能打开
+//  （登录时 keyring 自动解锁）。
+// - Windows（win32，未验证——此处无 Windows 机器，见
+//   scripts/qoder-cn-decrypt.ts）：仅对 Qoder 自家的
+//   auth.v1.dat 做尽力而为的候选探测。cn 只读 Qoder 自家落盘；CodeBuddy 系因跨厂商不可互认，已移除。
+//   国内版 IDE 在 Windows 上的确切落盘布局尚未确认，
+//   因此不断言任何单一固定路径——每个候选仅在存在时尝试
+//   （存在才试、失败换下一个），最终失败时一次性告警已试路径
+//   （仅路径，绝不含内容）。
+//   优先级：显式 authFile 参数（= 调用方配置覆盖）→
+//   QODER_CN_APPDATA 环境变量 → %APPDATA%/Qoder CN →
+//   %LOCALAPPDATA% 变体 → com.qodercn.app.* 目录。每个候选仅尝试
+//   auth.v1.dat：v10 前缀 → DPAPI（同级 Local State 中的
+//   os_crypt.encrypted_key）；v11 前缀 → 仅在显式给出
+//   QODER_CN_OS_CRYPT_PASSWORD 覆盖时做 PBKDF2
+//   （Linux 从 gnome-keyring 读口令，此处 win32 无等价物——绝不硬编码
+//   口令，改为通过解密脚本上报）。
 //
-// Same QoderIdeIdentity shape and "read-only, return null on any failure"
-// contract as the intl reader; probing + decryption live in the keystore
-// section of this file.
+// 与 intl 读取器相同的 QoderIdeIdentity 形状与“只读、任何失败返回 null”
+// 约定；探测与解密见本文件的 keystore 部分。
 //
-// Table form: every source below is a QoderIdeSource entry; the only loop is
-// runQoderIdeSources(entries). The five Linux-vs-win32-vs-intl differences
-// (roots, container, scheme, key source, field shape) are entry data.
+// 表形式：下方每个来源都是一条 QoderIdeSource 表项；唯一循环是
+// runQoderIdeSources(entries)。Linux 与 win32 与 intl 的五处差异
+//（roots、container、scheme、密钥来源、字段形状）均为表项数据。
 // ---------------------------------------------------------------------------
 
 
-/** Reads the CN IDE identity, or null when unavailable (logged out / other OS / locked keyring). */
+/** 读取 CN IDE 身份；不可用时返回 null（未登录 / 其他 OS / keyring 被锁定）。 */
 export function readQoderCnIdeIdentity(authFile?: string): QoderIdeIdentity | null {
   if (process.platform === "linux") return readQoderCnLinuxIdentity(authFile);
   if (process.platform === "win32") return readQoderCnWin32Identity(authFile);
-  return null; // libsecret/DPAPI-based; other platforms need different key stores
+  return null; // 基于 libsecret/DPAPI；其他平台需不同密钥存储
 }
 
 /**
@@ -544,9 +540,9 @@ function readQoderCnLinuxIdentity(authFile?: string): QoderIdeIdentity | null {
 }
 
 /**
- * Fetches the Electron safeStorage password for the CN IDE from
- * gnome-keyring via the system python3-gi binding (no new dependencies).
- * The secret only travels through a pipe into memory — it is never logged.
+ * 经系统 python3-gi 绑定从 gnome-keyring 获取 CN IDE 的
+ * Electron safeStorage 口令（不引入新依赖）。
+ * 该密钥仅经管道进入内存——绝不记入日志。
  */
 function osCryptPassword(): string | null {
   const script = `
@@ -572,13 +568,13 @@ sys.exit(1)
   return password || null;
 }
 
-/** Explicit v11 override on win32 (Linux reads this password from gnome-keyring instead). */
+/** win32 上显式的 v11 覆盖（Linux 改为从 gnome-keyring 读取该口令）。 */
 function win32EnvPassword(): string | null {
   return process.env["QODER_CN_OS_CRYPT_PASSWORD"]?.trim() || null;
 }
 
 // ---------------------------------------------------------------------------
-// win32 (UNVERIFIED): candidate probing + redacted diagnostics
+// win32（未验证）：候选探测 + 脱敏诊断
 // ---------------------------------------------------------------------------
 
 const KEYRING_APPS = ["Qoder CN App", "Qoder CN", "QoderCN"];
@@ -604,7 +600,7 @@ function cnAuthSource(root: string): QoderIdeSource {
   return makeCnDatSource({ root, file: join(root, "auth.v1.dat"), id: `cn-dat:${root}` });
 }
 
-/** Explicit file override as a table entry (auth.v1.dat only; state.vscdb probing removed — see cn table header). */
+/** 作为表项的显式文件覆盖（仅 auth.v1.dat；已移除 state.vscdb 探测——见 cn 表头）。 */
 function explicitWin32Source(file: string): QoderIdeSource {
   return makeCnDatSource({ root: dirname(file), file, id: `cn-explicit-dat:${file}` });
 }
@@ -624,7 +620,7 @@ function readQoderCnWin32Identity(authFile?: string): QoderIdeIdentity | null {
   }
   const hit = runQoderIdeSources(entries, tried);
   if (hit) return hit;
-  // Paths only — never file content, keys, or tokens.
+  // 仅路径——绝不含文件内容、密钥或 token。
   console.warn(
     `[qoder-cn] win32: no usable CN IDE identity (unverified layout — run decrypt:qoder-cn and report); tried: ${tried.join("; ")}`,
   );
@@ -632,10 +628,10 @@ function readQoderCnWin32Identity(authFile?: string): QoderIdeIdentity | null {
 }
 
 // ---------------------------------------------------------------------------
-// probe/diagnostic 导出 (win32)
+// 探测/诊断导出 (win32)
 // ---------------------------------------------------------------------------
 
-/** Redacted per-file probe result (win32): same shape as QoderIdeFileProbe — alias kept for compat. */
+/** 脱敏的单文件探测结果（win32）：形状同 QoderIdeFileProbe——为兼容保留的别名。 */
 export type QoderCnWin32FileProbe = QoderIdeFileProbe;
 
 export interface QoderCnWin32RootProbe {
@@ -645,9 +641,9 @@ export interface QoderCnWin32RootProbe {
 }
 
 /**
- * Ordered win32 candidate roots (existence is NOT checked here — probing does
- * that). Priority: explicit caller override → QODER_CN_APPDATA env →
- * %APPDATA% variants → %LOCALAPPDATA% variants → com.qodercn.app.* dirs.
+ * 有序的 win32 候选根目录（此处不检查存在性——由探测完成）。
+ * 优先级：显式调用方覆盖 → QODER_CN_APPDATA 环境变量 →
+ * %APPDATA% 变体 → %LOCALAPPDATA% 变体 → com.qodercn.app.* 目录。
  */
 export function listQoderCnWin32CandidateRoots(explicit?: string): string[] {
   const roots: string[] = [];
@@ -675,7 +671,7 @@ export function listQoderCnWin32CandidateRoots(explicit?: string): string[] {
   return roots;
 }
 
-/** Auto-discovered Qoder CN dirs under a base (e.g. %APPDATA%): com.qodercn* or qoder + cn. Missing/unreadable base → []. */
+/** 基目录（如 %APPDATA%）下自动发现的 Qoder CN 目录：com.qodercn* 或同时含 qoder 与 cn。基目录缺失 / 不可读 → []。 */
 function discoverQoderCnDirs(base: string): string[] {
   try {
     return readdirSync(base, { withFileTypes: true })
@@ -688,13 +684,13 @@ function discoverQoderCnDirs(base: string): string[] {
   }
 }
 
-/** Probe every candidate root without touching the network. Safe on any OS (missing paths just report exists:false). */
+/** 探测所有候选根目录，不触网。在任何 OS 上都安全（缺失路径仅上报 exists:false）。 */
 export function probeQoderCnWin32Candidates(explicit?: string): QoderCnWin32RootProbe[] {
   if (explicit) {
     try {
       if (statSync(explicit).isFile()) return [probeExplicitWin32File(explicit)];
     } catch {
-      // fall through to root probing
+      // 落空则继续按根目录探测
     }
   }
   return listQoderCnWin32CandidateRoots(explicit).map(probeWin32Root);

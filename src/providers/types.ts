@@ -7,9 +7,9 @@ export interface UpstreamResult {
 export interface ProviderAdapter {
   id: string;
   models(): Promise<string[]>;
-  /** Forward an Anthropic-format /v1/messages request (body already has the routed model id). */
+  /** 转发 Anthropic 格式的 /v1/messages 请求（body 中已是路由后的模型 ID）。 */
   anthropic(model: string, rawBody: string): Promise<UpstreamResult>;
-  /** Forward an OpenAI-format /v1/chat/completions request. */
+  /** 转发 OpenAI 格式的 /v1/chat/completions 请求。 */
   openai(model: string, rawBody: string): Promise<UpstreamResult>;
 }
 

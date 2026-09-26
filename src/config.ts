@@ -22,7 +22,7 @@ export interface ZCodeProviderConfig {
 export interface QoderProviderConfig {
   enabled: boolean;
   /**
-   * Personal Access Token (pt-…) from Qoder Integrations.
+   * 来自 Qoder Integrations 的 Personal Access Token（pt-…）。
    * - cn 国内版 (region: "cn")：PAT 与本机 IDE 登录二选一——
    *   ① config.json 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
    *   ④ 留空则自动复用本机 Qoder CN 桌面端登录（auth.v1.dat + 系统钥匙环，
@@ -33,15 +33,15 @@ export interface QoderProviderConfig {
    *   如有真实 intl PAT 可替换）。
    */
   pat?: string;
-  /** Path to the qoder2api sidecar binary (Qoder-2API-Go). */
+  /** qoder2api sidecar 二进制文件路径（Qoder-2API-Go）。 */
   bridgePath: string;
-  /** Local port the sidecar listens on. */
+  /** sidecar 监听的本地端口。 */
   bridgePort: number;
-  /** Bearer key all2api uses towards the sidecar. */
+  /** all2api 访问 sidecar 时使用的 Bearer 密钥。 */
   bridgeApiKey?: string;
-  /** "cn" (default) = gateway.qoder.com.cn; "intl" = international qoder.com deployment. */
+  /** "cn"（默认）= gateway.qoder.com.cn；"intl" = 海外版 qoder.com 部署。 */
   region?: "cn" | "intl";
-  /** Fallback model ids when the sidecar catalog is unavailable. */
+  /** sidecar 模型目录不可用时的回退模型 ID。 */
   models: string[];
 }
 
@@ -54,7 +54,7 @@ export interface CodeBuddyProviderConfig {
 export interface All2ApiConfig {
   host: string;
   port: number;
-  /** Bearer key clients must send to all2api itself */
+  /** 客户端访问 all2api 本身必须携带的 Bearer 密钥 */
   apiKey: string;
   defaultProvider: string;
   upstreamTimeoutMs: number;

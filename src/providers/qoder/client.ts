@@ -7,10 +7,10 @@ import type { BridgeHandle } from "./bridge.js";
 import { regionToProviderId } from "./constants.js";
 
 /**
- * Qoder provider backed by the local qoder2api bridge sidecar.
- *  - OpenAI requests are proxied through unchanged (the bridge is OpenAI-native).
- *  - Anthropic requests are translated to OpenAI, sent to the bridge, and the
- *    response (stream or not) is translated back to Anthropic format.
+ * 由本地 qoder2api 桥接 sidecar 驱动的 Qoder provider。
+ *  - OpenAI 请求原样透传（该桥接本身是 OpenAI 兼容的）。
+ *  - Anthropic 请求先转换为 OpenAI 格式发给桥接，
+ *    再将返回（流式或非流式）转回 Anthropic 格式。
  */
 export class QoderProvider implements ProviderAdapter {
   readonly id: string;
@@ -45,7 +45,7 @@ export class QoderProvider implements ProviderAdapter {
         }
       }
     } catch {
-      // fall back to the static list below
+      // 回退到下方的静态列表
     }
     return this.modelsFallback;
   }

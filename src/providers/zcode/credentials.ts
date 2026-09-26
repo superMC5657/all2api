@@ -9,9 +9,9 @@ export interface ZCodeCredentials {
 }
 
 /**
- * Reads and decrypts ~/.zcode/v2/credentials.json (the file ZCode CLI maintains
- * after `zcode login`). Values are AES-256-GCM encrypted with a machine-derived
- * key, so decryption only works on the same machine/user that ran the login.
+ * 读取并解密 ~/.zcode/v2/credentials.json（ZCode CLI 在 `zcode login` 后维护的文件）。
+ * 各值经 AES-256-GCM（GCM 分组加密模式）加密，密钥由本机派生，
+ * 因此仅在执行登录的同一台机器/同一用户下才能解密。
  *
  * Start Plan JWT 通道只用 zcodeJwt（coding-plan/bigmodel 按量通道已移除）。
  */

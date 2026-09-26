@@ -1,27 +1,27 @@
 /**
- * Qoder region single-source constants (P2 dedup).
- * No imports from config/bridge to avoid cycles.
+ * Qoder region（区域）单一来源常量（P2 去重）。
+ * 不从 config/bridge 导入，以避免循环依赖。
  */
 
 export type QoderRegion = "cn" | "intl";
 
-/** Placeholder PAT == region id ("cn" / "intl"): only clears the Go non-empty gate. */
+/** 占位 PAT == region id（"cn" / "intl"）：仅用于通过 Go 非空门槛校验。 */
 export const placeholderFor = (r: QoderRegion): string => r;
 
-/** Provider id for a region: cn -> "qoder", intl -> "qoder-intl". */
+/** 区域对应的 provider id：cn -> "qoder"，intl -> "qoder-intl"。 */
 export function regionToProviderId(region: QoderRegion): string {
   return region === "intl" ? "qoder-intl" : "qoder";
 }
 
-/** Sidecar data file for a region. */
+/** 某区域的 sidecar 数据文件。 */
 export const dataPathFor = (r: QoderRegion): string => `bridges/qoder-${r}.json`;
 
-/** Default sidecar binary path (win32 uses .exe). */
+/** 默认 sidecar 二进制路径（win32 使用 .exe）。 */
 export function defaultBridgePath(): string {
   return process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api";
 }
 
-/** Fallback model list for cn (verbatim). */
+/** cn 兜底模型列表（原文照录）。 */
 export const QODER_MODELS_BASE: string[] = [
   "Qwen3.8-Max",
   "DeepSeek-V4-Pro",
@@ -30,7 +30,7 @@ export const QODER_MODELS_BASE: string[] = [
   "MiniMax-M2.7",
 ];
 
-/** Fallback model list for intl: BASE[0], Qwen3.7-Max, ...BASE.slice(1). */
+/** intl 兜底模型列表：BASE[0]、Qwen3.7-Max、…BASE.slice(1)。 */
 export const QODER_MODELS_INTL: string[] = [QODER_MODELS_BASE[0] as string, "Qwen3.7-Max", ...QODER_MODELS_BASE.slice(1)];
 
 export interface QoderRegionDefaults {
@@ -68,7 +68,7 @@ export interface DefaultQoderConfig {
   models: string[];
 }
 
-/** Factory for the default per-region Qoder provider config (fresh models array per call). */
+/** 创建各区域默认 Qoder provider 配置的工厂函数（每次调用返回全新的 models 数组）。 */
 export function makeDefaultQoderConfig(region: QoderRegion): DefaultQoderConfig {
   const d = QODER_REGION_DEFAULTS[region];
   return {
@@ -82,7 +82,7 @@ export function makeDefaultQoderConfig(region: QoderRegion): DefaultQoderConfig 
   };
 }
 
-/** Extra env for the sidecar per region. */
+/** 各区域 sidecar 的额外环境变量。 */
 export const REGION_ENV: Record<QoderRegion, Record<string, string>> = {
   cn: {},
   intl: { QODER_REGION: "intl" },

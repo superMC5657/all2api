@@ -1,5 +1,5 @@
 /**
- * ZCode Start Plan (JWT) provider.
+ * ZCode Start Plan（JWT）提供方。
  *
  * 单账号直透：Anthropic 与 OpenAI 双协议统一走
  *   https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages

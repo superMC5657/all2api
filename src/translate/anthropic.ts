@@ -1,12 +1,12 @@
 /**
- * Anthropic <-> OpenAI translation for providers whose upstream only speaks
- * OpenAI chat completions (Qoder via the qoder2api bridge).
+ * Anthropic <-> OpenAI 互译，面向仅支持 OpenAI chat completions（聊天补全接口）的上游
+ * （Qoder 经 qoder2api 桥接接入）。
  *
- * Covers: system, text, images, tool definitions/calls/results, thinking
- * (reasoning_content), streaming in both formats.
+ * 覆盖范围：system（系统提示）、text（文本）、images（图像）、tool definitions/calls/results
+ * （工具定义/调用/结果）、thinking（思考块，reasoning_content）、双向 streaming（流式）。
  */
 
-// ---------- request: Anthropic -> OpenAI ----------
+// ---------- 请求：Anthropic -> OpenAI ----------
 
 type AnthropicBlock =
   | { type: "text"; text: string }
@@ -70,7 +70,7 @@ export function anthropicToOpenAI(req: AnthropicRequest): Record<string, unknown
       continue;
     }
 
-    // user message: text/images inline, tool_results become follow-up "tool" messages
+    // user（用户）消息：text（文本）/images（图像）内联，tool_results（工具结果）转为后续 "tool" 消息
     const inline: Array<Record<string, unknown>> = [];
     const toolResults: Extract<AnthropicBlock, { type: "tool_result" }>[] = [];
     for (const block of msg.content) {
@@ -107,10 +107,10 @@ export function anthropicToOpenAI(req: AnthropicRequest): Record<string, unknown
       req.tool_choice.type === "auto" ? "auto" : req.tool_choice.type === "any" ? "required" : { type: "function", function: { name: req.tool_choice.name } };
   }
 
-  // Anthropic thinking control → OpenAI reasoning_effort. Only acted on when
-  // the client asks explicitly: "enabled" maps the token budget to an effort
-  // level, "disabled" turns thinking off (honored by upstreams that allow it —
-  // e.g. qoder; zcode passes the Anthropic body through natively instead).
+  // Anthropic thinking（思考）控制 → OpenAI reasoning_effort（推理强度）。仅在客户端显式要求时生效：
+  // "enabled" 按 token 预算映射为 effort（强度）档位，
+  // "disabled" 关闭思考（由支持该参数的上游执行——
+  // 例如 qoder；zcode 改为原生透传 Anthropic 请求体，不走此处）。
   let reasoningEffort: string | undefined;
   if (req.thinking?.type === "enabled") {
     const budget = req.thinking.budget_tokens ?? 8192;
@@ -132,7 +132,7 @@ export function anthropicToOpenAI(req: AnthropicRequest): Record<string, unknown
   };
 }
 
-// ---------- response: OpenAI -> Anthropic (non-stream) ----------
+// ---------- 响应：OpenAI -> Anthropic（非流式） ----------
 
 interface OpenAIMessage {
   content?: string | null;
@@ -193,14 +193,14 @@ export function openAIToAnthropicResponse(resp: OpenAIResponse, model: string): 
   };
 }
 
-// ---------- stream: OpenAI SSE -> Anthropic SSE ----------
+// ---------- 流式：OpenAI SSE -> Anthropic SSE ----------
 
 interface StreamChunk {
   choices?: Array<{ delta?: OpenAIMessage & { tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }>;
   usage?: OpenAIResponse["usage"];
 }
 
-/** Builds Anthropic SSE frames from a sequence of OpenAI deltas. */
+/** 由一串 OpenAI deltas（增量片段）组装 Anthropic SSE（服务端推送事件流）帧。 */
 export class AnthropicStreamBuilder {
   private blockIndex = -1;
   private openBlock: "thinking" | "text" | null = null;
@@ -222,7 +222,7 @@ export class AnthropicStreamBuilder {
     });
   }
 
-  /** Feed one OpenAI chunk; returns zero or more Anthropic SSE frames. */
+  /** 输入一个 OpenAI chunk（数据块）；返回零或多个 Anthropic SSE 帧。 */
   feed(chunk: StreamChunk): string[] {
     const out: string[] = [];
     if (chunk.usage) this.usage = chunk.usage;
@@ -277,7 +277,7 @@ export class AnthropicStreamBuilder {
     return out;
   }
 
-  /** Closes remaining blocks and emits the final delta/stop frames. */
+  /** 关闭剩余 blocks（内容块）并输出收尾 delta（增量）/stop（结束）帧。 */
   finish(): string[] {
     const out = this.closeOpenBlock();
     for (const [, entry] of this.toolBlocks) {
@@ -310,7 +310,7 @@ export class AnthropicStreamBuilder {
   }
 }
 
-/** Wraps an OpenAI SSE stream into an Anthropic SSE stream. */
+/** 将 OpenAI SSE 流包装为 Anthropic SSE 流。 */
 export function translateOpenAIStreamToAnthropic(upstream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const builder = new AnthropicStreamBuilder(model);
   const decoder = new TextDecoder();
@@ -349,7 +349,7 @@ export function translateOpenAIStreamToAnthropic(upstream: ReadableStream<Uint8A
             try {
               for (const out of builder.feed(JSON.parse(payload) as StreamChunk)) push(out);
             } catch {
-              // ignore malformed frames from upstream
+              // 忽略上游发来的畸形帧
             }
           }
 
