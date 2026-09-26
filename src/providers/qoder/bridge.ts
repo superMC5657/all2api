@@ -52,7 +52,7 @@ async function ensureSidecarBinary(binary: string): Promise<string> {
 }
 
 async function buildSidecar(binary: string): Promise<string> {
-  // default layout: <root>/bridges/qoder2api.exe → <root>/third_party/qoder2api
+  // default layout: <root>/bridges/qoder2api[.exe] → <root>/third_party/qoder2api
   const sourceDir = resolve(dirname(binary), "..", "third_party", "qoder2api");
   if (!existsSync(sourceDir)) {
     throw new Error(

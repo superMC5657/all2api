@@ -1,0 +1,7 @@
+{
+  "name": "all2api-zcode-captcha-solver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ZCode Start Plan 阿里云无痕验证求解器运行目录（solver.js 原样复制自 zcode2api @ ba79b05）",
+  "type": "commonjs"
+}

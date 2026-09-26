@@ -62,7 +62,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 1. 打开 Qoder → 设置 → **Integrations**，创建一个 Personal Access Token（`pt-` 开头）；
 2. 填入 `config.json` 的 `providers.qoder.pat`，重启 `pnpm start`；
-3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api.exe`，首次启动时若不存在会自动从 third_party/qoder2api 源码编译，需本机有 Go ≥1.22），把 PAT 注入其 `bridges/qoder-data.json` 并监听 `127.0.0.1:10081`。
+3. all2api 会自动拉起内置的 Qoder-2API-Go sidecar（`bridges/qoder2api`，Windows 下为 `bridges/qoder2api.exe`；首次启动时若不存在会自动从 third_party/qoder2api 源码编译，需本机有 Go ≥1.22），把 PAT 注入其 `bridges/qoder-data.json` 并监听 `127.0.0.1:10081`。
 
 - Qoder 网关的会话机制是 RSA+AES 混合加密 + MD5 签名（约 2900 行 Go 实现），本项目**不重写协议**，而是把成熟的开源实现作为 sidecar 子进程托管，all2api 对其做反向代理；
 - OpenAI 请求原样透传给 sidecar；`/v1/messages` 的 Anthropic 格式由本项目转换层（`src/translate/anthropic.ts`）双向转换：system/多段文本/图片/tool 调用/thinking（reasoning_content）/流式事件全部支持。**思考等级可控制**：OpenAI 协议直接传 `reasoning_effort`（qoder-intl 支持 none~xhigh 且实测有效；zcode 支持 low/high/max，模型始终思考不可关闭；codebuddy 接受但效果未证实）；Anthropic 协议的 `thinking` 参数由转换层映射为 `reasoning_effort`（enabled 按 budget_tokens 分档，disabled 映射 none），zcode 走原生透传不经映射；
@@ -73,7 +73,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 
 ### qoder-intl（海外版适配，已完成）
 
-`bridges/qoder2api.exe` 是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。补丁后的完整 Go 源码已收进 `third_party/qoder2api/`（上游基点、改动清单、patch 存档见其 `VENDOR.md`），改完源码跑 `pnpm build:sidecar` 即可重新编译。两个区域可同时运行（不同端口、不同 data.json）：
+`bridges/qoder2api`（Windows 下为 `.exe` 后缀）是本项目打过补丁的双区域版本：sidecar 原版硬编码国内网关，本仓库给它加了 `INTL` 区域（`QODER_REGION=intl` 切换，默认仍是 CN，**国内版行为不变**）。补丁后的完整 Go 源码已收进 `third_party/qoder2api/`（上游基点、改动清单、patch 存档见其 `VENDOR.md`），改完源码跑 `pnpm build:sidecar` 即可重新编译。两个区域可同时运行（不同端口、不同 data.json）：
 
 - 国际版端点映射（从海外版 IDE 的端点注册表提取 + 存活探测验证）：Auth/Chat → `center.qoder.sh`，OpenAPI（额度）→ `openapi.qoder.sh`；`/algo/api/v2/*` 路径与国内版同构，签名会话协议一致；
 - **鉴权与国内版不同**：海外版没有 Integrations PAT 交换，all2api 直接解密海外版 IDE 的登录身份（`state.vscdb` 的 `secret://aicoding.auth.userInfo`，Chromium os_crypt `v10`+AES-256-GCM，密钥经 `Local State` 的 DPAPI 解出）并以纯 Bearer + 签名会话直连——**零用户操作**，重启 all2api 时自动重新提取；
@@ -102,7 +102,7 @@ export ANTHROPIC_MODEL=glm-5.3-flash
 | `upstreamTimeoutMs` | `600000` | 上游请求超时 |
 | `providers.zcode.apiKey` | 空 | 留空 = 自动解密本机凭据；也可手动填智谱 key |
 | `providers.qoder.pat` | 空 | Qoder PAT |
-| `providers.qoder.bridgePath` | `bridges/qoder2api.exe` | sidecar 二进制路径 |
+| `providers.qoder.bridgePath` | `bridges/qoder2api`（Windows `bridges/qoder2api.exe`） | sidecar 二进制路径 |
 
 **模型路由**：所有模型统一以 `provider/model` 形式展示与调用（如 `zcode/glm-5.3`、`codebuddy/hy4-preview`）；兼容起见，不带前缀的裸名仍会路由到默认 provider，但不再出现在 `/v1/models` 列表中。
 
@@ -124,7 +124,7 @@ src/
    ├─ types.ts               # ProviderAdapter 接口
    ├─ zcode/                 # cipher.ts(解密) credentials.ts(读凭据) client.ts(透传)
    └─ qoder/                 # bridge.ts(sidecar 托管) client.ts(代理+翻译)
-scripts/                     # decrypt:zcode / probe:zcode / test-translate
+scripts/                     # decrypt:zcode / test-translate
 bridges/                     # qoder2api sidecar 二进制(启动时自动编译,不入库) + 数据文件(凭据, gitignore)
 ```
 

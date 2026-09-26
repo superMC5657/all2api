@@ -27,16 +27,18 @@ all2api 自身不直接实现 Qoder 协议，只做 HTTP 代理与 OpenAI⇄Anth
 
 ## 运行时约定（bridge.ts 侧）
 
-- 二进制：`bridges/qoder2api.exe` —— **不入库**。all2api 启动时若发现缺失，会用本目录源码自动编译（需 Go ≥ 1.22；见 `src/providers/qoder/bridge.ts` 的 `ensureSidecarBinary`），也可用 `pnpm build:sidecar` 手动编译
+- 二进制：`bridges/qoder2api`（Windows 下为 `bridges/qoder2api.exe`）—— **不入库**。all2api 启动时若发现缺失，会用本目录源码自动编译（需 Go ≥ 1.22；见 `src/providers/qoder/bridge.ts` 的 `ensureSidecarBinary`），也可用 `pnpm build:sidecar` 手动编译
 - 环境变量：`QODER_HOST=127.0.0.1`、`QODER_PORT=10081/10082`、`QODER_DATA_PATH`、`QODER_REGION=intl`（国际版时）
 - 数据文件：`bridges/qoder-cn.json` / `bridges/qoder-intl.json`（含凭据，已在 `.gitignore`）
 
 ## 手动编译
 
 ```bash
-# 需要 Go ≥ 1.22（本机验证过 go1.26.1）
+# 需要 Go ≥ 1.22（本机验证过 go1.26.1），输出路径按平台自动加 `.exe` 后缀
 pnpm build:sidecar
-# 等价于：
+# 等价于（Linux/macOS）：
+cd third_party/qoder2api && go build -o ../../bridges/qoder2api .
+# 等价于（Windows）：
 cd third_party/qoder2api && go build -o ../../bridges/qoder2api.exe .
 ```
 

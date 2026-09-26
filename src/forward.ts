@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 
 import type { ProviderAdapter } from "./providers/types.js";
-import { extractStreamFlag } from "./providers/types.js";
+import { ProviderError, extractStreamFlag } from "./providers/types.js";
 import { routeModel } from "./router.js";
 import { logUsage } from "./usage.js";
 
@@ -50,16 +50,17 @@ export async function forwardCompletion(c: Context, kind: "openai" | "anthropic"
     const headers = { "content-type": result.contentType };
     return new Response(result.body, { status: result.status, headers });
   } catch (err) {
+    const status = err instanceof ProviderError ? err.status : 502;
     logUsage({
       ts: new Date().toISOString(),
       provider: target.provider.id,
       model: target.model,
       api: kind,
       stream,
-      status: 502,
+      status,
       ms: Date.now() - startedAt,
     });
     const message = err instanceof Error && err.name === "TimeoutError" ? "upstream request timed out" : `upstream request failed: ${(err as Error).message}`;
-    return c.json({ error: { message, type: "upstream_error" } }, 502);
+    return c.json({ error: { message, type: "upstream_error" } }, status as 400 | 401 | 402 | 403 | 405 | 429 | 502);
   }
 }

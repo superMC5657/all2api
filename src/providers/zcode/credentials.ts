@@ -14,10 +14,6 @@ export interface ZCodeCredentials {
   zcodeJwt?: string;
   activeProvider?: string;
   userInfo?: ZCodeUserInfo;
-  apiKeys: {
-    individual?: string;
-    team?: string;
-  };
 }
 
 /**
@@ -36,15 +32,6 @@ export function readZCodeCredentials(credentialsPath?: string): ZCodeCredentials
     return typeof value === "string" && value.startsWith("enc:v1:") ? cipher.decrypt(value) : undefined;
   };
 
-  const apiKeys: ZCodeCredentials["apiKeys"] = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (!key.startsWith("account-provider:coding-plan:") || !key.endsWith(":api-key")) continue;
-    if (typeof value !== "string") continue;
-    const decrypted = cipher.decrypt(value);
-    if (key.includes("bigmodel-team-coding-plan")) apiKeys.team = decrypted;
-    else if (key.includes("bigmodel-individual-coding-plan")) apiKeys.individual = decrypted;
-  }
-
   let userInfo: ZCodeUserInfo | undefined;
   const rawUserInfo = dec("oauth:bigmodel:user_info");
   if (rawUserInfo) {
@@ -60,7 +47,6 @@ export function readZCodeCredentials(credentialsPath?: string): ZCodeCredentials
     zcodeJwt: dec("zcodejwttoken"),
     activeProvider: dec("oauth:active_provider"),
     userInfo,
-    apiKeys,
   };
   return creds;
 }

@@ -3,11 +3,23 @@ import { join } from "node:path";
 
 export interface ZCodeProviderConfig {
   enabled: boolean;
-  /** Explicit API key; when empty, the key is decrypted from ~/.zcode/v2/credentials.json */
-  apiKey?: string;
-  anthropicBaseUrl: string;
-  openaiBaseUrl: string;
+  /**
+   * Start Plan JWT（eyJ…）。留空/缺省则自动读本机 `zcode login` 的
+   * ~/.zcode/v2/credentials.json（zcodeJwt）；非空视为显式 JWT 优先使用。
+   * 禁配 bigmodel/open.bigmodel.cn 的 API Key——按量（coding-plan）通道已移除。
+   */
+  jwt?: string;
   models: string[];
+  /** ZCode 桌面端版本号仿真（上游身份头 X-ZCode-App-Version），默认 "3.11.2" */
+  appVersion?: string;
+  /** 一号一台设备指纹持久化文件，默认 ~/.zcode/v2/all2api-device.json */
+  deviceFile?: string;
+  /** @deprecated coding-plan/bigmodel API-Key 通道已移除；保留仅为兼容旧配置解析，不再使用 */
+  apiKey?: string;
+  /** @deprecated 已废弃（曾为 open.bigmodel.cn 基址）；保留仅为兼容旧配置解析，不再使用 */
+  anthropicBaseUrl?: string;
+  /** @deprecated 已废弃；保留仅为兼容旧配置解析，不再使用 */
+  openaiBaseUrl?: string;
 }
 
 export interface QoderProviderConfig {
@@ -213,10 +225,11 @@ const DEFAULTS: All2ApiConfig = {
   providers: {
     zcode: {
       enabled: false,
-      anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
-      openaiBaseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
-      // 2026-09-26 用免费 Start Plan key 实测：flash/flashx 放行可用，
-      // glm-5.3 完整版上游无限挂起（付费 key 时代它才可用），故不列入
+      jwt: "",
+      appVersion: "3.11.2",
+      // 2026-09-26 Start Plan JWT 通道：Anthropic/OpenAI 双协议统一走
+      // https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages + Bearer JWT，
+      // 不再依赖 open.bigmodel.cn / api.z.ai 按量端点。
       models: ["glm-5.3-flash", "glm-5.3-flashx"],
     },
     qoder: {
