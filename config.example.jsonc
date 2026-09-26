@@ -24,31 +24,31 @@
       "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3"]
     },
     "qoder": {
+      // Qoder 公共语义（cn/intl 通用，只写一次）：
+      // bridgePath 缺省按操作系统自动选择（win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api），如需覆盖才显式填写；
+      // bridgeApiKey 缺省每次启动自动生成，如需固定可手动指定（"bridgeApiKey": ""）；
+      // region："cn" = gateway.qoder.com.cn，"intl" = 海外 qoder.com 部署；
+      // models 为显示名（sidecar 映射到内部 key），sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
       "enabled": false,
-      // 国内版（region: "cn"）：三选一必须有 PAT，否则调不通——
-      // ① 这里的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat。
+      // 国内版（region: "cn"）：PAT 与本机 IDE 登录二选一——
+      // ① 这里的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
+      // ④ 留空则自动复用本机 Qoder CN 桌面端登录。有真实 PAT 时 PAT 优先。
+      // win32 补充：本机 IDE 登录在 Windows 上可用但未经验证（unverified）——
+      // 请先在 Windows 跑 `pnpm decrypt:qoder-cn`（或 npx tsx scripts/qoder-cn-decrypt.ts）验证后把输出回传。
       "pat": "",
-      // 缺省按操作系统自动选择（win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api）；
-      // 如需覆盖才显式填写 bridgePath。
       "bridgePort": 10081,
-      // "bridgeApiKey": "", // 缺省每次启动自动生成；如需固定可手动指定
-      // "cn" = gateway.qoder.com.cn；"intl" = 海外 qoder.com 部署。
+      // "bridgeApiKey": "", // 见公共语义：缺省自动生成
       "region": "cn",
-      // models 为显示名（sidecar 映射到内部 key）；sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
       "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
     },
     "qoderIntl": {
       "enabled": true,
-      // 海外版（region: "intl"）：填 "intl" 占位或真实 PAT，空 = 起不来。
-      // Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换。
+      // 海外版：填 "intl" 占位或真实 PAT，空 = 起不来。
+      // Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换（PAT 优先）。
       "pat": "intl",
-      // 缺省按操作系统自动选择（win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api）；
-      // 如需覆盖才显式填写 bridgePath。
       "bridgePort": 10082,
-      // "bridgeApiKey": "", // 缺省每次启动自动生成；如需固定可手动指定
-      // "cn" = gateway.qoder.com.cn；"intl" = 海外 qoder.com 部署。
+      // "bridgeApiKey": "", // 见公共语义：缺省自动生成
       "region": "intl",
-      // models 为显示名（sidecar 映射到内部 key）；sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
       "models": ["Qwen3.8-Max", "Qwen3.7-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
     },
     "codebuddy": {

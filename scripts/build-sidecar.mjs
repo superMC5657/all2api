@@ -5,6 +5,7 @@
  */
 import { execFileSync } from "node:child_process";
 
+// 平台后缀以 src/providers/qoder/constants.ts 为准（此处仅组装输出路径，不另定后缀规则）。
 const out = `bridges/qoder2api${process.platform === "win32" ? ".exe" : ""}`;
 execFileSync("go", ["build", "-o", `../../${out}`, "."], {
   cwd: new URL("../third_party/qoder2api", import.meta.url),

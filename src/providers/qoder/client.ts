@@ -4,6 +4,7 @@ import { anthropicToOpenAI, openAIToAnthropicResponse, translateOpenAIStreamToAn
 import type { AnthropicRequest } from "../../translate/anthropic.js";
 import type { QoderProviderConfig } from "../../config.js";
 import type { BridgeHandle } from "./bridge.js";
+import { regionToProviderId } from "./constants.js";
 
 /**
  * Qoder provider backed by the local qoder2api bridge sidecar.
@@ -22,7 +23,7 @@ export class QoderProvider implements ProviderAdapter {
     private readonly bridge: BridgeHandle,
     private readonly timeoutMs: number,
   ) {
-    this.id = config.region === "intl" ? "qoder-intl" : "qoder";
+    this.id = regionToProviderId(config.region ?? "cn");
     this.modelsFallback = config.models;
   }
 

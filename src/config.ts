@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { readQoderCnIdeIdentity } from "./providers/qoder/credentials.js";
+import { makeDefaultQoderConfig, type QoderRegion } from "./providers/qoder/constants.js";
+
 export interface ZCodeProviderConfig {
   enabled: boolean;
   /**
@@ -26,8 +29,11 @@ export interface QoderProviderConfig {
   enabled: boolean;
   /**
    * Personal Access Token (pt-…) from Qoder Integrations.
-   * - cn 国内版 (region: "cn")：三选一必须有 PAT，否则调不通——
-   *   ① config.json 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat。
+   * - cn 国内版 (region: "cn")：PAT 与本机 IDE 登录二选一——
+   *   ① config.json 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
+   *   ④ 留空则自动复用本机 Qoder CN 桌面端登录（auth.v1.dat + 系统钥匙环，
+   *   此时 bridges 数据文件里写 "cn" 标记仅为通过 Go 非空门槛，真鉴权走 IDE 身份）。
+   *   有真实 PAT 时 PAT 优先。
    * - intl 海外版 (region: "intl")：填 "intl" 占位或真实 PAT，空 = 起不来
    *   （Go 门槛要求非空，此占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；
    *   如有真实 intl PAT 可替换）。
@@ -232,28 +238,8 @@ const DEFAULTS: All2ApiConfig = {
       // 不再依赖 open.bigmodel.cn / api.z.ai 按量端点。
       models: ["glm-5.3-flash", "glm-5.3-flashx"],
     },
-    qoder: {
-      enabled: false,
-      // explicit "": 待填，domestic 必填。cn 未填时保持空字符串直通，由 loadConfig() 校验提示（去 config 或 admin 填），
-      // 避免字段缺失时旧 config.json（只有 baseUrl/models）合并后更迷惑。
-      pat: "",
-      // win32 用 .exe，其余平台（Linux/macOS）用无后缀二进制。
-      bridgePath: process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api",
-      bridgePort: 10081,
-      region: "cn",
-      models: ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
-    },
-    qoderIntl: {
-      enabled: true,
-      // Go 门槛要求非空，此 "intl" 占位仅过门槛，真鉴权走本机 IDE 的 securityOauthToken；如有真实 intl PAT 可替换。
-      pat: "intl",
-      // win32 用 .exe，其余平台（Linux/macOS）用无后缀二进制。
-      bridgePath: process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api",
-      bridgePort: 10082,
-      region: "intl",
-      // 显示名，sidecar 映射到内部 key
-      models: ["Qwen3.8-Max", "Qwen3.7-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"],
-    },
+    qoder: makeDefaultQoderConfig("cn"),
+    qoderIntl: makeDefaultQoderConfig("intl"),
     codebuddy: {
       enabled: true,
       userAgent: "all2api/0.1",
@@ -282,6 +268,21 @@ const DEFAULTS: All2ApiConfig = {
     },
   },
 };
+
+/** 只 warn 不 throw 的凭据缺失提示（文案原样，legacy bridges/qoder-cn.json 只回落 cn）。 */
+function warnNoCredential(region: QoderRegion, port: number): void {
+  if (region === "intl") {
+    console.warn(
+      `[config] providers.qoderIntl.pat 为空（空 = 起不来）— 请填 "intl" 占位或真实 PAT；` +
+        `占位仅过 Go 非空门槛，真鉴权走本机 IDE 登录`,
+    );
+    return;
+  }
+  console.warn(
+    `[config] providers.qoder 已启用但无可用凭据（config.pat / sidecar 管理后台 / bridges/qoder-cn.json 遗留 / 本机 Qoder CN 桌面端登录都没找到）— ` +
+      `请在 config.json 的 providers.qoder.pat 填写 pt-…（PAT 与 IDE 登录二选一，有 PAT 则 PAT 优先），或打开 http://127.0.0.1:${port}/admin（默认密码 password）填写后重启，或登录国内版 Qoder 桌面端后重启`,
+  );
+}
 
 export function loadConfig(): All2ApiConfig {
   const configPath = resolveConfigPath();
@@ -321,18 +322,12 @@ export function loadConfig(): All2ApiConfig {
     } catch {
       // 读不到遗留文件就当没有，bridge 启动时还会再警告
     }
-    if (!filePat && !legacyPat) {
-      console.warn(
-        `[config] providers.qoder 已启用但三处都没 PAT（config.pat / sidecar 管理后台 / bridges/qoder-cn.json 遗留）— ` +
-          `请在 config.json 的 providers.qoder.pat 填写 pt-…，或打开 http://127.0.0.1:${cfg.providers.qoder.bridgePort}/admin（默认密码 password）填写后重启`,
-      );
+    if (!filePat && !legacyPat && !readQoderCnIdeIdentity()) {
+      warnNoCredential("cn", cfg.providers.qoder.bridgePort);
     }
   }
   if (cfg.providers.qoderIntl.enabled && !cfg.providers.qoderIntl.pat?.trim()) {
-    console.warn(
-      `[config] providers.qoderIntl.pat 为空（空 = 起不来）— 请填 "intl" 占位或真实 PAT；` +
-        `占位仅过 Go 非空门槛，真鉴权走本机 IDE 登录`,
-    );
+    warnNoCredential("intl", cfg.providers.qoderIntl.bridgePort);
   }
   return cfg;
 }

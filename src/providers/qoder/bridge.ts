@@ -2,7 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-import { readQoderIdeIdentity } from "./ide-credentials.js";
+import { readQoderIdeIdentityFor } from "./credentials.js";
+import { placeholderFor, REGION_ENV, type QoderRegion } from "./constants.js";
 
 /**
  * Manages the Qoder-2API-Go sidecar binary: prepares its data.json (PAT + API key),
@@ -32,6 +33,8 @@ interface BridgeDataFile {
   expireTime?: number;
   [key: string]: unknown;
 }
+
+/** Placeholder == region id (see placeholderFor); kept here as doc only. */
 
 /**
  * The sidecar binary is a build artifact, not source: it must never be
@@ -84,7 +87,7 @@ export async function startBridge(opts: {
   port: number;
   apiKey?: string;
   /** "intl" runs the sidecar against the international (qoder.com) deployment. */
-  region?: "cn" | "intl";
+  region?: QoderRegion;
   timeoutMs?: number;
 }): Promise<BridgeHandle> {
   const binary = resolve(opts.binaryPath);
@@ -104,19 +107,59 @@ export async function startBridge(opts: {
   }
   data.host = "127.0.0.1";
   data.port = opts.port;
-  if (opts.pat?.trim()) data.pat = opts.pat.trim();
-  if (opts.region === "intl" && !opts.pat?.trim()) {
-    // INTL: no PAT — reuse the desktop IDE's own login identity instead.
-    const ide = readQoderIdeIdentity();
+  const pat = opts.pat?.trim() ?? "";
+  const region: QoderRegion = opts.region ?? "cn";
+  if (pat) {
+    data.pat = pat;
+    // A real PAT wins over any IDE identity left in data.json by an earlier
+    // no-PAT run (the Go side skips the PAT exchange whenever an identity is
+    // present). A placeholder is not a real PAT — it only clears the
+    // Go non-empty gate while the IDE identity does the actual auth.
+    const isPlaceholder = pat === placeholderFor(region);
+    if (!isPlaceholder) {
+      delete data.securityOauthToken;
+      delete data.refreshToken;
+      delete data.uid;
+      delete data.nickname;
+      delete data.expireTime;
+    }
+  } else {
+    // No PAT — reuse the desktop IDE's own login identity instead (cn and
+    // intl alike). Stale identity fields are dropped first so a dead login
+    // can never shadow a PAT later added via the sidecar admin panel.
+    delete data.securityOauthToken;
+    delete data.refreshToken;
+    delete data.uid;
+    delete data.nickname;
+    delete data.expireTime;
+    const ide = readQoderIdeIdentityFor(region);
     if (ide) {
       data.securityOauthToken = ide.token;
       data.refreshToken = ide.refreshToken;
       data.uid = ide.uid;
       data.nickname = ide.nickname;
       data.expireTime = ide.expireTime;
-      console.log(`[qoder-bridge] using intl IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"}) — 已复用本机 Qoder IDE 登录（config 里 intl pat 请保持 "intl" 占位以通过 Go 非空门槛，真鉴权走此 IDE 身份）`);
+      if (region === "cn") {
+        // Go builds no bridge for an empty PAT (same reason intl needs its
+        // "intl" placeholder): the placeholder only clears that non-empty
+        // gate — the session still bootstraps purely from the IDE identity
+        // above, and no PAT exchange ever runs. A real PAT (config or admin
+        // panel) always replaces this marker.
+        data.pat = placeholderFor(region);
+      }
+      console.log(`[qoder-bridge] using ${region} IDE identity of ${ide.nickname} (expires ${ide.expireTime ? new Date(ide.expireTime).toISOString() : "unknown"}) — 已复用本机 Qoder IDE 登录（config 里 ${region} pat 为空即走此 IDE 身份，有真实 PAT 则 PAT 优先）`);
     } else {
-      console.warn("[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT（中文：intl 未填 PAT 且没读到本机 IDE 登录，请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT，也可先登录海外版 Qoder IDE 后重启）");
+      // Drop our own placeholder when the IDE login is gone — a stale marker
+      // must never masquerade as a PAT. (The marker is only ever written on
+      // the cn path.) A real PAT (e.g. from the sidecar admin panel) is left
+      // untouched so it takes effect.
+      if (region === "cn" && data.pat === placeholderFor("cn")) delete data.pat;
+      const NO_IDE_WARN: Record<QoderRegion, string> = {
+        intl:
+          "[qoder-bridge] no PAT and no logged-in intl Qoder IDE found — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT（中文：intl 未填 PAT 且没读到本机 IDE 登录，请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT，也可先登录海外版 Qoder IDE 后重启）",
+        cn: "[qoder-bridge] no PAT and no logged-in Qoder CN IDE found — fill providers.qoder.pat with a pt-… PAT, or log in the Qoder CN desktop app and restart（中文：国内版既无 PAT 也没读到本机 Qoder CN 登录，请在 config.json 的 providers.qoder.pat 填写 pt-…，或登录国内版 Qoder 桌面端后重启）",
+      };
+      console.warn(NO_IDE_WARN[region]);
     }
   }
   if (!data.password) data.password = crypto.randomUUID();
@@ -137,7 +180,7 @@ export async function startBridge(opts: {
       QODER_HOST: "127.0.0.1",
       QODER_PORT: String(opts.port),
       QODER_DATA_PATH: dataPath,
-      ...(opts.region === "intl" ? { QODER_REGION: "intl" } : {}),
+      ...REGION_ENV[region],
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -168,15 +211,11 @@ export async function startBridge(opts: {
     throw new Error("qoder bridge did not become healthy in time — check [qoder-bridge] log lines above");
   }
   if (!hasPat) {
-    if (opts.region === "intl") {
-      console.warn(
-        "[qoder-bridge] no PAT configured — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT in config.json（中文：intl 缺 PAT（空 = 起不来），请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT）",
-      );
-    } else {
-      console.warn(
-        `[qoder-bridge] no PAT configured — set providers.qoder.pat in config.json (or via the bridge admin panel), then restart all2api（中文：国内版缺 PAT，请在 config.json 的 providers.qoder.pat 填写，或打开 http://127.0.0.1:${opts.port}/admin 管理后台填写后重启）`,
-      );
-    }
+    const NO_PAT_WARN: Record<QoderRegion, string> = {
+      intl: "[qoder-bridge] no PAT configured — set providers.qoderIntl.pat to the \"intl\" placeholder or a real PAT in config.json（中文：intl 缺 PAT（空 = 起不来），请在 config.json 的 providers.qoderIntl.pat 填 \"intl\" 占位或真实 PAT）",
+      cn: `[qoder-bridge] no PAT configured and no Qoder CN desktop login found — set providers.qoder.pat in config.json (or via the bridge admin panel), or log in the Qoder CN desktop app, then restart all2api（中文：国内版缺 PAT 且无本机 IDE 登录（PAT 与 IDE 登录二选一），请在 config.json 的 providers.qoder.pat 填写，或打开 http://127.0.0.1:${opts.port}/admin 管理后台填写后重启，或登录国内版 Qoder 桌面端后重启）`,
+    };
+    console.warn(NO_PAT_WARN[region]);
   }
 
   const stop = () => {

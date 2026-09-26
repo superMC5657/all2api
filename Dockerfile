@@ -1,7 +1,8 @@
 FROM golang:1.26-alpine AS bridge-builder
-RUN apk add --no-cache git \
- && git clone --depth 1 --branch main https://github.com/superMC5657/Qoder-2API-Go.git /qoder2api \
- && cd /qoder2api \
+# 本地构建：用仓库内 third_party/qoder2api（fork 440b11e，已含 INTL 区域补丁，见 third_party/qoder2api.VENDOR.md），不从 GitHub 拉 main HEAD。
+# QODER_REGION 由 TS startBridge（src/providers/qoder/bridge.ts）按 region 注入，Dockerfile 不设。
+COPY third_party/qoder2api /qoder2api
+RUN cd /qoder2api \
  && CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/qoder2api .
 
 FROM node:22-alpine
