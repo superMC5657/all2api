@@ -279,6 +279,71 @@ function blocksFromUserContent(content: unknown): Array<Record<string, any>> {
   return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
 }
 
+/** OpenAI reasoning 预算 → Anthropic thinking（上游 zcode-plan 为 Anthropic 兼容端）。
+ * 优先透传 thinking={type:"enabled",budget_tokens} 形态；非法值静默忽略不抛错。 */
+const REASONING_EFFORT_BUDGET: Record<string, number> = {
+  low: 1024,
+  medium: 8192,
+  high: 16384,
+  xhigh: 32768,
+  max: 32768,
+};
+
+// ── output 上限识别（纯转发，不做任何自动加码） ───────────────────────────────
+// output 类参数优先级：max_tokens > max_completion_tokens > max_output_tokens
+//   > output_token_limit；非法值（非正整数）忽略并顺延下一优先级，0 穿透到下一优先级。
+// 有显式用显式，无显式用 4096；仅做 [1,131072] 钳制+超限 warn。
+// thinking 预算仅纯转发，绝不反过来改 max_tokens。
+const OUTPUT_LIMIT_KEYS = ["max_tokens", "max_completion_tokens", "max_output_tokens", "output_token_limit"] as const;
+
+function explicitOutputLimit(payload: Record<string, any>): { value: number; key: string } | null {
+  for (const key of OUTPUT_LIMIT_KEYS) {
+    if (!(key in payload)) continue;
+    const raw = payload[key];
+    if (raw == null || typeof raw === "boolean") continue;
+    const n = asInt(raw);
+    if (n == null || n <= 0) continue;
+    return { value: n, key };
+  }
+  return null;
+}
+
+function thinkingFromPayload(payload: Record<string, any>): Record<string, any> | null {
+  const raw = payload["reasoning_effort"] ?? payload["reasoning"] ?? payload["thinking"];
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    const eff = raw.trim().toLowerCase();
+    if (!eff) return null;
+    if (eff === "none" || eff === "disabled" || eff === "off") return { type: "disabled" };
+    const budget = REASONING_EFFORT_BUDGET[eff];
+    return budget != null ? { type: "enabled", budget_tokens: budget } : null;
+  }
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const r = raw as Record<string, any>;
+    // 调用方直接给 Anthropic thinking 形态则原样透传（仅校验字段）
+    if (typeof r["type"] === "string") {
+      const t = String(r["type"]).toLowerCase();
+      if (t === "disabled") return { type: "disabled" };
+      if (t === "enabled") {
+        const b = asInt(r["budget_tokens"] ?? r["budget"] ?? r["max_tokens"]);
+        return b != null && b > 0 ? { type: "enabled", budget_tokens: b } : { type: "enabled", budget_tokens: 8192 };
+      }
+      return null;
+    }
+    const effortRaw = r["effort"] ?? r["level"];
+    if (typeof effortRaw === "string") {
+      const eff = effortRaw.trim().toLowerCase();
+      if (!eff) return null;
+      if (eff === "none" || eff === "disabled" || eff === "off") return { type: "disabled" };
+      const budget = REASONING_EFFORT_BUDGET[eff];
+      return budget != null ? { type: "enabled", budget_tokens: budget } : null;
+    }
+    const b = asInt(r["budget_tokens"] ?? r["budget"] ?? r["max_tokens"] ?? r["tokens"]);
+    return b != null && b > 0 ? { type: "enabled", budget_tokens: b } : null;
+  }
+  return null;
+}
+
 /** OpenAI 请求体 → Anthropic messages 体。非法时返回 { error }。 */
 export function openaiToAnthropic(
   payload: Record<string, any>,
@@ -344,8 +409,23 @@ export function openaiToAnthropic(
     }
   }
 
-  const maxTokens = asInt(payload["max_tokens"] ?? payload["max_completion_tokens"]) ?? 4096;
+  const thinking = thinkingFromPayload(payload);
+  // max_tokens 纯转发：有显式用显式，无显式用 4096；仅做上限制钳制+超限 warn。
+  // thinking 预算仅透传，绝不反过来改 max_tokens。
+  const explicit = explicitOutputLimit(payload);
+  let maxTokens: number;
+  if (explicit != null) {
+    if (explicit.value > MAX_TOKENS_LIMIT) {
+      console.warn(`[zcode] max_tokens ${explicit.value} 超出上游范围 [1,${MAX_TOKENS_LIMIT}]，钳制为 ${MAX_TOKENS_LIMIT}`);
+      maxTokens = MAX_TOKENS_LIMIT;
+    } else {
+      maxTokens = explicit.value;
+    }
+  } else {
+    maxTokens = 4096;
+  }
   const body: AnthropicBody = { model, messages: outMsgs, max_tokens: maxTokens };
+  if (thinking) body["thinking"] = thinking;
   if (systemParts.length > 0) body["system"] = systemParts.join("\n\n");
   try {
     if (payload["temperature"] != null) body["temperature"] = Number(payload["temperature"]);
@@ -392,9 +472,10 @@ export function openaiToAnthropic(
   return { body };
 }
 
-/** Anthropic message 响应 → OpenAI chat.completion。 */
+/** Anthropic message 响应 → OpenAI chat.completion（thinking 透出为 reasoning_content）。 */
 export function anthropicToOpenai(data: Record<string, any>, model: string): Record<string, any> {
   const textParts: string[] = [];
+  const thinkingParts: string[] = [];
   const toolCalls: Array<Record<string, any>> = [];
   const content = data["content"];
   if (Array.isArray(content)) {
@@ -402,7 +483,11 @@ export function anthropicToOpenai(data: Record<string, any>, model: string): Rec
       if (block == null || typeof block !== "object") continue;
       const b = block as Record<string, any>;
       if (b["type"] === "text" && typeof b["text"] === "string") textParts.push(b["text"] as string);
-      else if (b["type"] === "tool_use") {
+      else if (b["type"] === "thinking" && typeof b["thinking"] === "string") thinkingParts.push(b["thinking"] as string);
+      else if (b["type"] === "redacted_thinking") {
+        const redacted = b["data"] ?? b["thinking"];
+        if (typeof redacted === "string" && redacted) thinkingParts.push(redacted);
+      } else if (b["type"] === "tool_use") {
         toolCalls.push({
           id: String(b["id"] ?? ""),
           type: "function",
@@ -418,6 +503,8 @@ export function anthropicToOpenai(data: Record<string, any>, model: string): Rec
   const inTok = asInt(usage["input_tokens"]) ?? 0;
   const outTok = asInt(usage["output_tokens"]) ?? 0;
   const message: Record<string, any> = { role: "assistant", content: textParts.join("") || null };
+  const reasoningText = thinkingParts.join("");
+  if (reasoningText) message["reasoning_content"] = reasoningText;
   if (toolCalls.length > 0) message["tool_calls"] = toolCalls;
   return {
     id: String(data["id"] ?? `chatcmpl-${randomUUID().replaceAll("-", "").slice(0, 24)}`),
@@ -487,6 +574,8 @@ export class StreamConverter {
     }
     if (etype === "content_block_start") {
       const block = (evt["content_block"] as Record<string, any> | undefined) ?? {};
+      // thinking/redacted_thinking 开始：不产出 chunk（避免污染 content），仅记录状态不断流
+      if (block["type"] === "thinking" || block["type"] === "redacted_thinking") return [];
       if (block["type"] === "tool_use") {
         const idx = this.toolSeq;
         this.toolSeq += 1;
@@ -507,6 +596,14 @@ export class StreamConverter {
     }
     if (etype === "content_block_delta") {
       const delta = (evt["delta"] as Record<string, any> | undefined) ?? {};
+      // thinking 增量 → OpenAI reasoning_content：thinking 期不断流，agent 可见进度，
+      // 且不污染 content/tool_calls。本地零依赖实现（不 import translate/ 目录）。
+      if (delta["type"] === "thinking_delta" && typeof delta["thinking"] === "string") {
+        if (!delta["thinking"]) return [];
+        return [this.chunk({ reasoning_content: delta["thinking"] as string })];
+      }
+      // signature 为签名二进制/校验串，非思考文本：显式忽略，不透入 reasoning_content
+      if (delta["type"] === "signature_delta") return [];
       if (delta["type"] === "text_delta" && typeof delta["text"] === "string") {
         return [this.chunk({ content: delta["text"] as string })];
       }

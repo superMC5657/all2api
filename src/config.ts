@@ -13,7 +13,7 @@ export interface ZCodeProviderConfig {
    */
   jwt?: string;
   models: string[];
-  /** ZCode 桌面端版本号仿真（上游身份头 X-ZCode-App-Version），默认 "3.11.2" */
+  /** ZCode 桌面端版本号仿真（上游身份头 X-ZCode-App-Version）。留空跟随本机 zcode 安装（注册表>exe>runtime）；显式填写才覆盖探测；都找不到回落 CLIENT_APP_VERSION_DEFAULT 常量 */
   appVersion?: string;
   /** 一号一台设备指纹持久化文件，默认 ~/.zcode/v2/all2api-device.json */
   deviceFile?: string;
@@ -24,7 +24,7 @@ export interface QoderProviderConfig {
   /**
    * 来自 Qoder Integrations 的 Personal Access Token（pt-…）。
    * - cn 国内版 (region: "cn")：PAT 与本机 IDE 登录二选一——
-   *   ① config.json 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
+   *   ① config.jsonc 的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
    *   ④ 留空则自动复用本机 Qoder CN 桌面端登录（auth.v1.dat + 系统钥匙环，
    *   此时 bridges 数据文件里写 "cn" 标记仅为通过 Go 非空门槛，真鉴权走 IDE 身份）。
    *   有真实 PAT 时 PAT 优先。
@@ -262,7 +262,8 @@ const DEFAULTS: All2ApiConfig = {
     zcode: {
       enabled: false,
       jwt: "",
-      appVersion: "3.11.2",
+      // 空=跟随本地安装（注册表>exe>runtime）；显式填写才覆盖探测
+      appVersion: "",
       // 2026-09-26 Start Plan JWT 通道：Anthropic/OpenAI 双协议统一走
       // https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages + Bearer JWT，
       // 不再依赖 open.bigmodel.cn / api.z.ai 按量端点。
@@ -339,7 +340,7 @@ export function loadConfig(): All2ApiConfig {
     console.log(`[config] apiKey missing or placeholder — generated a new one and wrote it to ${configPath}`);
     cfg.apiKey = generated;
   }
-  // qoder 配置体验校验（只 warn、不 throw，旧 config.json 形状缺字段时也能跑但要提示清楚）。
+  // qoder 配置体验校验（只 warn、不 throw，旧 config.jsonc（或 legacy config.json）形状缺字段时也能跑但要提示清楚）。
   if (cfg.providers.qoder.enabled) {
     const filePat = cfg.providers.qoder.pat?.trim() ?? "";
     let legacyPat = "";

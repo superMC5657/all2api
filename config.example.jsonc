@@ -12,6 +12,12 @@
     "zcode": {
       // Start Plan JWT 通道（Anthropic/OpenAI 双协议）。不要填 bigmodel/open.bigmodel.cn 的 Key。
       "enabled": false,
+      // JWT 优先级：此 jwt 非空即优先；留空自动读本机 `zcode login` 的 ~/.zcode/v2/credentials.json。
+      // "jwt": "",
+      // appVersion 可选，不填跟随本地安装；只有需要锁版本才填。
+      // "appVersion": "3.14.3",
+      // 一号一台设备指纹持久化文件（按 JWT sub 区分）。缺省 ~/.zcode/v2/all2api-device.json，支持 ~ 前缀。
+      // "deviceFile": "~/.zcode/v2/all2api-device.json",
       // 仅展示（/v1/models）+ 兜底，实际可用以网关/套餐为准。
       "models": ["glm-5.3-flash", "glm-5.3-flashx"]
     },
@@ -22,6 +28,10 @@
       // PAT 与本机 IDE 登录二选一：留空自动复用本机 CN 登录，有 PAT 则 PAT 优先。
       // Windows 首次建议先跑 `pnpm decrypt:qoder-cn` 验证登录是否可读。
       "pat": "",
+      // sidecar 二进制显式覆盖。缺省 bridges/qoder2api（Windows 为 bridges/qoder2api.exe）。
+      // "bridgePath": "bridges/qoder2api",
+      // sidecar 本地鉴权密钥。缺省自动处理，需覆盖才填。
+      // "bridgeApiKey": "",
       "bridgePort": 10081,
       "region": "cn",
       "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
@@ -38,6 +48,22 @@
       "enabled": true,
       // 留空全自动探测；特殊安装才需显式键，见 README codebuddy 一节。
       "userAgent": "all2api/0.1",
+      // auth 目录显式覆盖（其下 *.info 文件；也可直接指向单个 *.info 文件）。缺省自动探测双 App 目录。
+      // "authDir": "",
+      // Electron 二进制显式覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先于此）。缺省自动探测。
+      // "electronPath": "",
+      // electronPath 的别名；两者都填时 electronPath 优先。
+      // "electronBinary": "",
+      // at-rest 密钥 linked-binding 名显式覆盖。缺省按序尝试各 App 绑定名，任一命中即用。
+      // "keyBinding": "",
+      // vscdb 凭据源（仅 .info 不可用时 fallback，Win 行为不变）。覆盖顺序：CODEBUDDY_VSCDB 环境变量 > vscdbPath。
+      // "vscdbPath": "",
+      // vscdb ItemTable 键名（默认 planning-genie.new.accessTokencn）。
+      // "vscdbKey": "planning-genie.new.accessTokencn",
+      // 钥匙环 application 名（默认 CodeBuddy CN）。
+      // "vscdbApp": "CodeBuddy CN",
+      // vscdb 应用目录名覆盖（默认 CodeBuddy CN，仅改变平台惯例路径中的目录段）。
+      // "vscdbDir": "CodeBuddy CN",
       // 仅展示（/v1/models），拉不到时用此表。
       "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
     }

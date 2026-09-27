@@ -18,7 +18,7 @@ if (cfg.providers.qoderIntl.enabled)
   providers.push(await startQoderProvider(cfg.providers.qoderIntl, cfg.upstreamTimeoutMs));
 if (cfg.providers.codebuddy.enabled) providers.push(new CodeBuddyProvider(cfg.providers.codebuddy, cfg.upstreamTimeoutMs));
 if (providers.length === 0) {
-  console.error("[config] all providers are disabled — enable at least one in config.json");
+  console.error("[config] all providers are disabled — enable at least one in config.jsonc");
   process.exit(1);
 }
 

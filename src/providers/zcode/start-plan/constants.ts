@@ -2,9 +2,8 @@
  * Start Plan (JWT) 通道上游常量收口。
  *
  * Python 对照：app/constants.py（ZCODE_ORIGIN、MESSAGES_PATHS、MODEL_NAME_MAP、
- * MAX_TOKENS_LIMIT、验证码头名、CLIENT_APP_VERSION=3.11.2）。
+ * MAX_TOKENS_LIMIT、验证码头名、CLIENT_APP_VERSION=3.14.3）。
  * 模块代码禁止硬编码上游 URL / 模型名 / 关键字，一律 import 本模块。
- * 不再依赖 open.bigmodel.cn / api.z.ai 按量端点（已彻底移除）。
  */
 
 // ── 上游 origin / 端点 ──────────────────────────────────────────────────────
@@ -14,10 +13,8 @@ export const ZCODE_ORIGIN = "https://zcode.z.ai";
 export const MESSAGES_PATH = "/api/v1/zcode-plan/anthropic/v1/messages";
 export const MESSAGES_URL = `${ZCODE_ORIGIN}${MESSAGES_PATH}`;
 
-// ── 客户端版本（单一真相源：官方桌面端现行版 3.11.2）────────────────────────
-export const CLIENT_APP_VERSION_DEFAULT = "3.11.2";
-// 服务端固定伪装平台（部署机多为 Linux 云主机，直接暴露与桌面端形状不符）
-export const CLIENT_PLATFORM = "darwin-arm64";
+// ── 客户端版本（单一真相源：官方桌面端现行版 3.14.3，仅找不到本地安装时回落用）────────────────────────
+export const CLIENT_APP_VERSION_DEFAULT = "3.14.3";
 export const CLIENT_CONFIGS_URL = `${ZCODE_ORIGIN}/api/v1/client/configs`;
 export function clientConfigsUrl(appVersion: string): string {
   return `${CLIENT_CONFIGS_URL}?app_version=${encodeURIComponent(appVersion)}`;

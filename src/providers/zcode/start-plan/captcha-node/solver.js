@@ -11,7 +11,7 @@
 // 设计对齐 zapi captcha-happy.ts（设计移植，非代码拷贝）：
 //   1. 常量指纹（Chrome/127 Linux + SwiftShader WebGL + 1px canvas）
 //   2. alicdn 资源磁盘+内存双缓存（~/.zcode-captcha-cdn-cache/<sha1>）
-//   3. pe.* 字节码 VM 补丁（btoa/atob 调用打 __DBT 观测钩子）
+//   3. pe.* 字节码 VM 补丁（btoa/atob 调用分支保留，__DBT 观测记账已移除）
 //   4. interceptor 全量接管网络层：每请求注入 client-hint/UA/origin/referer
 //   5. guest 侧补丁（Event.isTrusted、HTMLDocument 命名、错误静默记录）
 //   6. ~40 项浏览器 polyfill + native-toString 伪装 + 行为仿真（鼠标滑动）
@@ -78,9 +78,6 @@ const HTML = `<!DOCTYPE html><html><head></head><body>
 // ── CDN 双缓存 ──────────────────────────────────────────────────────────────
 const CDN_CACHE_DIR = path.join(os.homedir(), ".zcode-captcha-cdn-cache");
 const _memCdnCache = new Map();
-// 同一进程内一次求解只跑一遍，但 stall 记账按 URL 保留在模块级：
-// 子进程池串行拉起时，上一进程的 stall 文件由磁盘 eviction 落实。
-const _stallCounts = new Map();
 
 function diskPathFor(url) {
   return path.join(CDN_CACHE_DIR, crypto.createHash("sha1").update(String(url)).digest("hex"));
@@ -138,26 +135,17 @@ async function fetchAndStore(url) {
 // 下次 init 重新拉新版 pe 字节码（旋转版本可能整体坏掉）。
 function noteStallAndMaybeEvict(peUrl) {  try {
     if (!peUrl || !/dynamicJS\//.test(peUrl)) return;
-    const n = (_stallCounts.get(peUrl) || 0) + 1;
-    _stallCounts.set(peUrl, n);
-    process.stderr.write(`[pe-stall] ${peUrl.split("/").pop()} x${n}\n`);
-    if (n >= 2) {
-      _memCdnCache.delete(peUrl);
-      try {
-        fs.unlinkSync(diskPathFor(peUrl));
-      } catch (_) {}
-      _stallCounts.delete(peUrl);
-    } else if (fs.existsSync(diskPathFor(peUrl))) {
-      // 子进程内没有"下次"，直接当次失效：删缓存让下一次进程拉新
-      _memCdnCache.delete(peUrl);
-      try {
-        fs.unlinkSync(diskPathFor(peUrl));
-      } catch (_) {}
-    }
+    // 单进程一进程一解，无跨进程计数：当次直接逐出内存+磁盘缓存，
+    // 下一次进程重新拉新版 pe 字节码。
+    process.stderr.write(`[pe-stall] ${peUrl.split("/").pop()}\n`);
+    _memCdnCache.delete(peUrl);
+    try {
+      fs.unlinkSync(diskPathFor(peUrl));
+    } catch (_) {}
   } catch (_) {}
 }
 
-// ── pe.* 字节码 VM 观测钩子（btoa/atob 调用入栈时记录，排障用）───────────────
+// ── pe.* 字节码 VM 补丁位（btoa/atob 调用分支保留；观测记账已移除）───────────
 const peVmCallRegex =
   /55==A\?\(f=r\[n\+\+\],l=e\.pop\(\),h=e\.pop\(\),o=\[\],\w+\(f\)\.forEach\(function\(\)\{o\.unshift\(e\.pop\(\)\)\}\),p=null===h\?l\.apply\((\w+),o\):h\[l\]\.apply\(h,o\),r\[n\+\+\]&&e\.push\(p\)\):/;
 function patchPeBundle(buf, url) {
@@ -168,7 +156,7 @@ function patchPeBundle(buf, url) {
   const m = src.match(peVmCallRegex);
   if (!m) return buf;
   const locals = m[1];
-  const hook = `55==A?(f=r[n++],l=e.pop(),h=e.pop(),o=[],v(f).forEach(function(){o.unshift(e.pop())}),p=null===h?l.apply(${locals},o):h[l].apply(h,o),r[n++]&&e.push(p),function(){try{if(l===window.btoa||l===window.atob){window.__DBT=window.__DBT||[];var __sav=[];for(var __i=0;__i<e.length;__i++){var __vv=e[__i];if(typeof __vv==="string"){__sav.push("s:"+__vv)}else if(typeof __vv==="number"){__sav.push("n:"+__vv)}else if(typeof __vv==="boolean"){__sav.push("b:"+__vv)}else if(__vv&&typeof __vv.length==="number"){__sav.push("a:"+__vv.length)}else{__sav.push("t:"+typeof __vv)}}var __ls={};for(var __k2 in ${locals}){if(__k2!=="_"&&__k2!=="*"&&__k2!=="arguments"){try{var __lv=${locals}[__k2];if(typeof __lv==="string"){__ls[__k2]="s:"+__lv}else if(typeof __lv==="number"){__ls[__k2]="n:"+__lv}else if(__lv&&typeof __lv.length==="number"){__ls[__k2]="a:"+__lv.length}else{__ls[__k2]="t:"+typeof __lv}}catch(_e){}}}window.__DBT.push({call:"btoa",ip:n,args:o.map(function(__a){return typeof __a==="string"?"s:"+__a:typeof __a==="number"?"n:"+__a:typeof __a==="function"?"fn:"+(__a.name||"?"):typeof __a==="object"&&__a?"obj":typeof __a}),stack:__sav,locals:__ls,rlen:r.length,r:r})}}catch(_e){}}()):`;
+  const hook = `55==A?(f=r[n++],l=e.pop(),h=e.pop(),o=[],v(f).forEach(function(){o.unshift(e.pop())}),p=null===h?l.apply(${locals},o):h[l].apply(h,o),r[n++]&&e.push(p),function(){try{if(l===window.btoa||l===window.atob){/* __DBT 观测记账已移除：单进程无消费，仅保留分支判断 */}}catch(_e){}}()):`;
   src = src.replace(m[0], hook);
   dbg(`loader-patch ${url} (VM hook applied, locals=${locals})`);
   return Buffer.from(src, "utf8");
@@ -1370,9 +1358,7 @@ function simulateBehavior(w, durationMs = 600) {
   moveStep();
 }
 
-// ── cookie priming 缓存（对齐 zapi _cookieCache，5 分钟） ─────────────────────
-const COOKIE_CACHE_TTL_MS = 5 * 60 * 1000;
-let _cookieCache = { cookies: [], ts: 0 };
+// ── cookie priming（单进程一进程一解：直取首页 set-cookie，无缓存） ──────────
 
 // ── waitFor：轮询等待条件成立（initAliyunCaptcha 挂载） ──────────────────────
 function waitFor(cond, timeoutMs, intervalMs = 50) {
@@ -1396,29 +1382,23 @@ function waitFor(cond, timeoutMs, intervalMs = 50) {
 }
 
 // ── createDom：装配一个可解验证码的 happy-dom 窗口 ──────────────────────────
-// 对齐 zapi createDom：cookie priming（5min 缓存）→ GlobalWindow（开启 JS 执行 +
+// 对齐 zapi createDom：cookie priming（直取，无缓存）→ GlobalWindow（开启 JS 执行 +
 // 拦截器）→ WindowBrowserContext 取 cookieContainer → 预置 cookie → 装 polyfill/
 // 掩码/eval 探针（务必在 SDK 脚本执行前）→ document.write(HTML) → 挂 config。
 async function createDom(region, prefix) {
   let cookies = [];
-  const now = Date.now();
-  if (_cookieCache.ts > 0 && now - _cookieCache.ts < COOKIE_CACHE_TTL_MS) {
-    cookies = _cookieCache.cookies;
-  } else {
-    try {
-      const res = await fetch("https://zcode.z.ai/", {
-        headers: {
-          "User-Agent": fp.userAgent,
-          "sec-ch-ua": '"Chromium";v="' + fp.uaMajor + '", "Not)A;Brand";v="24"',
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": '"Linux"',
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      });
-      cookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
-      _cookieCache = { cookies, ts: Date.now() };
-    } catch (_) {}
-  }
+  try {
+    const res = await fetch("https://zcode.z.ai/", {
+      headers: {
+        "User-Agent": fp.userAgent,
+        "sec-ch-ua": '"Chromium";v="' + fp.uaMajor + '", "Not)A;Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    cookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  } catch (_) {}
 
   const interceptor = makeInterceptor();
 
@@ -1674,12 +1654,6 @@ async function main() {
         reject(err);
       }
     });
-
-    // 成功后清理该 pe 的失速计数
-    try {
-      const okPe = w.__lastPeUrl;
-      if (okPe) _stallCounts.delete(okPe);
-    } catch (_) {}
 
     const out = extractVerifyParam(param);
     process.stdout.write("VERIFY_PARAM=" + out + "\n");

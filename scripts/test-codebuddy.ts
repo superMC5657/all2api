@@ -4,7 +4,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { aggregateOpenAIStream } from "../src/translate/openai-aggregate.js";
-import { buildAuthenticatedContextAad, openEnvelope, parseEnvelope, sealField } from "../src/providers/codebuddy/index.js";
+import { buildAuthenticatedContextAad, openEnvelope, parseEnvelope, sealField } from "../src/providers/codebuddy/credentials.js";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string): void {

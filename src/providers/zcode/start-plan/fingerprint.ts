@@ -1,14 +1,7 @@
 /**
  * 每账号客户端指纹（设备档案）—— 一号一台设备。
  *
- * Python 对照：app/fingerprint.py（DeviceProfile、random_profile()、profile_for()）。
- *  - 从成套 SKU 表抽样（platform × arch × os_version × screen 绑定），
- *    禁止字段笛卡尔积（darwin-arm64 + 1366x768 这类假电脑不出）。
- *  - 无 linux SKU：官方桌面主形态是 Mac / Windows；无号时回退
- *    darwin-arm64 桌面常量即可。
- *  - 语言/时区取真实地区对；device_mid 每次全新 UUIDv4，跨账号不复用。
- *  - 持久化到本机文件（默认 ~/.zcode/v2/all2api-device.json），按 JWT sub
- *    一号一台；install/telemetry 上报不做（二期）。
+ * Python 对照：app/fingerprint.py。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,7 +15,7 @@ export interface DeviceProfile {
   osVersion: string; // X-Os-Version（os.release() 语义）
   language: string; // X-Client-Language
   timezone: string; // X-Client-Timezone（IANA）
-  screen: string; // 激活事件 screen_resolution（本期仅存档，未上报）
+  screen: string; // 旧存档兼容字段：不再写入、不上报，仅内存 SKU 校验用
   deviceMid: string; // X-Device-Mid（UUIDv4）
 }
 
@@ -150,13 +143,18 @@ function asStoredProfile(value: unknown): DeviceProfile | null {
     typeof osVersion !== "string" ||
     typeof language !== "string" ||
     typeof timezone !== "string" ||
-    typeof screen !== "string" ||
     typeof deviceMid !== "string" ||
     !UUID_RE.test(deviceMid)
   ) {
     return null;
   }
-  return { platform, arch, osVersion, language, timezone, screen, deviceMid };
+  // screen 不再落盘：旧文件自带则兼容读取；缺失时按同组 SKU 确定性回填
+  // （仅内存校验用，不上报；回填后仍非 SKU 则调用方按旧版形态重建）。
+  const resolvedScreen =
+    typeof screen === "string" && SCREEN_RE.test(screen)
+      ? screen
+      : (SKUS.find((s) => s[1] === platform && s[2] === arch && s[3] === osVersion)?.[4] ?? "1512x982");
+  return { platform, arch, osVersion, language, timezone, screen: resolvedScreen, deviceMid };
 }
 
 /** 解析 deviceFile 路径（空 → 默认 ~/.zcode/v2/all2api-device.json；支持 ~ 前缀）。 */
@@ -187,7 +185,19 @@ function loadStore(deviceFile: string): Record<string, DeviceProfile> {
 function saveStore(deviceFile: string, store: Record<string, DeviceProfile>): void {
   try {
     mkdirSync(dirname(deviceFile), { recursive: true });
-    writeFileSync(deviceFile, JSON.stringify(store, null, 2) + "\n", "utf8");
+    // screen 不再落盘（仅内存 SKU 校验用）：逐项剥离后写入，旧文件读取仍兼容。
+    const slim: Record<string, Omit<DeviceProfile, "screen">> = {};
+    for (const [key, profile] of Object.entries(store)) {
+      slim[key] = {
+        platform: profile.platform,
+        arch: profile.arch,
+        osVersion: profile.osVersion,
+        language: profile.language,
+        timezone: profile.timezone,
+        deviceMid: profile.deviceMid,
+      };
+    }
+    writeFileSync(deviceFile, JSON.stringify(slim, null, 2) + "\n", "utf8");
   } catch (err) {
     console.warn(`[zcode] device 指纹文件写入失败: ${deviceFile}: ${(err as Error).message}`);
   }

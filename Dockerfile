@@ -13,7 +13,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY src ./src
 RUN pnpm install --frozen-lockfile
 COPY --from=bridge-builder /out/qoder2api ./bridges/qoder2api
-# the bridge binary on Linux has no .exe suffix — override in config.json:
+# the bridge binary on Linux has no .exe suffix — override in config.jsonc
+# (legacy config.json is only a fallback when config.jsonc is missing):
 #   providers.qoder.bridgePath = "bridges/qoder2api"
 ENV ALL2API_HOST=0.0.0.0
 ENV ALL2API_PORT=8787

@@ -13,7 +13,7 @@ export interface ZCodeCredentials {
  * 各值经 AES-256-GCM（GCM 分组加密模式）加密，密钥由本机派生，
  * 因此仅在执行登录的同一台机器/同一用户下才能解密。
  *
- * Start Plan JWT 通道只用 zcodeJwt（coding-plan/bigmodel 按量通道已移除）。
+ * Start Plan JWT 通道只用 zcodeJwt。
  */
 export function readZCodeCredentials(credentialsPath?: string): ZCodeCredentials | null {
   const path = credentialsPath ?? join(homedir(), ".zcode", "v2", "credentials.json");

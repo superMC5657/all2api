@@ -7,7 +7,6 @@
  * OpenAI 请求先做 OpenAI→Anthropic 最小转换；非流原样回译，
  * 流透传时做 StreamConverter 翻译 + 首 role chunk + 尾 [DONE]。
  *
- * 不再依赖 open.bigmodel.cn / api.z.ai 按量端点（已彻底移除）。
  * 错误语义（单账号，无换号；抛错带 upstream status+body）：
  *  - 验证码挑战：换码重试最多 3 次
  *  - 402/额度关键词 → EXHAUSTED，直接抛 402
@@ -22,6 +21,7 @@ import type { ProviderAdapter, UpstreamResult } from "../types.js";
 import { ProviderError, toUpstreamResult } from "../types.js";
 import type { ZCodeProviderConfig } from "../../config.js";
 import { readZCodeCredentials } from "./credentials.js";
+import { CLIENT_APP_VERSION_DEFAULT } from "./start-plan/constants.js";
 import {
   MAX_429_RETRIES,
   MAX_5XX_RETRIES,
@@ -44,8 +44,7 @@ import {
 import { jwtUserId } from "./start-plan/body-transform.js";
 import { getVerifyParam } from "./start-plan/captcha.js";
 import { profileForJwt, resolveDeviceFile } from "./start-plan/fingerprint.js";
-
-const APP_VERSION_DEFAULT = "3.11.2";
+import { resolveZCodeAppVersion } from "./start-plan/version.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -161,7 +160,8 @@ export class ZCodeProvider implements ProviderAdapter {
       );
     }
     this.jwt = jwt;
-    this.appVersion = config.appVersion?.trim() || APP_VERSION_DEFAULT;
+    // 缺省跟随本地（config 显式值 > ZCODE_APP_VERSION > 注册表 > exe > runtime），找不到回落常量
+    this.appVersion = resolveZCodeAppVersion({ configVersion: config.appVersion }) ?? CLIENT_APP_VERSION_DEFAULT;
     this.deviceFile = resolveDeviceFile(config.deviceFile);
     this.timeoutMs = timeoutMs;
     this.modelList = config.models;
