@@ -1,75 +1,45 @@
 // all2api 配置模板：cp config.example.jsonc config.jsonc 后改 apiKey / 各 provider 开关。
-// 本文件是 JSONC：可写 // 与 /* */ 注释、可留尾逗号，loadConfig 会 strip 后再 JSON.parse。
+// JSONC：可写 // 与 /* */ 注释、可留尾逗号。
 {
   "host": "127.0.0.1",
   "port": 8787,
-  // all2api 自身的 Bearer 鉴权 key（客户端发 Authorization: Bearer <apiKey>）。
-  // 缺失 / 空 / 全空白 / 占位 "sk-all2api-change-me" 会在启动时自动生成随机 key 并文本级回写（保留注释）。
+  // 客户端 Authorization: Bearer <apiKey>。缺失 / 占位启动时自动生成并回写。
   "apiKey": "sk-all2api-change-me",
-  // 裸模型 id（不带 provider/ 前缀）回落到这个 provider；"provider/model" 可显式 pin 到某 provider。
-  // 若该 id 对应的 provider 未启用，再回落到第一个已启用的 provider。
+  // 不带 provider/ 前缀的模型回落到此 provider；可用 "provider/model" 显式指定。
   "defaultProvider": "qoderIntl",
   "upstreamTimeoutMs": 600000,
   "providers": {
     "zcode": {
-      // Start Plan JWT 通道：Anthropic/OpenAI 双协议统一走
-      // https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages + Bearer JWT。
-      // 禁配 bigmodel/open.bigmodel.cn 的 API Key（按量/coding-plan 通道已移除，暂不支持）。
+      // Start Plan JWT 通道（Anthropic/OpenAI 双协议）。不要填 bigmodel/open.bigmodel.cn 的 Key。
       "enabled": false,
-      // 以下均为自动项，一般不用填；如需手动指定，取消注释：
-      // "jwt": "",          // 显式 JWT；缺省自动读本机 `zcode login` 的 zcodeJwt
-      // "appVersion": "3.11.2", // 上游身份头版本号仿真
-      // "deviceFile": "",   // 一号一台指纹文件；缺省 ~/.zcode/v2/all2api-device.json
-      // models 仅展示（/v1/models 输出）+ 兜底：实际可用模型以网关/套餐为准。
+      // 仅展示（/v1/models）+ 兜底，实际可用以网关/套餐为准。
       "models": ["glm-5.3-flash", "glm-5.3-flashx"]
     },
     "qoder": {
-      // Qoder 公共语义（cn/intl 通用，只写一次）：
-      // bridgePath 缺省按操作系统自动选择（win32 用 bridges/qoder2api.exe，Linux/macOS 用无后缀的 bridges/qoder2api），如需覆盖才显式填写；
-      // bridgeApiKey 缺省每次启动自动生成，如需固定可手动指定（"bridgeApiKey": ""）；
-      // region："cn" = gateway.qoder.com.cn，"intl" = 海外 qoder.com 部署；
-      // models 为显示名（sidecar 映射到内部 key），sidecar /v1/models 拉不到时兜底用此表（5 分钟缓存）。
+      // bridgePath / bridgeApiKey 缺省自动处理，需覆盖才填；region: cn=国内网关，intl=海外。
+      // models 仅展示 + 兜底。
       "enabled": false,
-      // 国内版（region: "cn"）：PAT 与本机 IDE 登录二选一——
-      // ① 这里的 `pat`；② sidecar 管理后台填的 PAT；③ `bridges/qoder-cn.json` 里遗留的 pat；
-      // ④ 留空则自动复用本机 Qoder CN 桌面端登录。有真实 PAT 时 PAT 优先。
-      // win32 补充：本机 IDE 登录在 Windows 上可用但未经验证（unverified）——
-      // 请先在 Windows 跑 `pnpm decrypt:qoder-cn`（或 npx tsx scripts/qoder-cn-decrypt.ts）验证后把输出回传。
+      // PAT 与本机 IDE 登录二选一：留空自动复用本机 CN 登录，有 PAT 则 PAT 优先。
+      // Windows 首次建议先跑 `pnpm decrypt:qoder-cn` 验证登录是否可读。
       "pat": "",
       "bridgePort": 10081,
-      // "bridgeApiKey": "", // 见公共语义：缺省自动生成
       "region": "cn",
       "models": ["Qwen3.8-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
     },
     "qoderIntl": {
       "enabled": true,
-      // 海外版（region: "intl"）：与 qoder 同构，PAT 与本机 IDE 登录二选一——
-      // 留空则启动时自动复用本机海外版 IDE 登录（win32 走 DPAPI + state.vscdb，
-      // Linux 走 gnome-keyring + state.vscdb 候选；读到身份才写 "intl" 占位过 Go 非空门槛）。
-      // 有真实 intl PAT 则 PAT 优先（此时自动清除 data.json 里残留的 IDE 身份，见 bridge.ts:111-123）。
+      // 同上：留空自动复用本机 intl 登录，有 PAT 则 PAT 优先。
       "pat": "",
       "bridgePort": 10082,
-      // "bridgeApiKey": "", // 见公共语义：缺省自动生成
       "region": "intl",
       "models": ["Qwen3.8-Max", "Qwen3.7-Max", "DeepSeek-V4-Pro", "GLM-5.3", "Kimi-K2.7-Code", "MiniMax-M2.7"]
     },
     "codebuddy": {
       "enabled": true,
-      // 全自动探测：双 App（CodeBuddy 在前）× .info 优先、vscdb 回退；
-      // Electron 二进制自动探测（WorkBuddy 在前，Linux 含 buddycn 真实路径）；
-      // auth 文件 × 二进制 pair-trial，keyId 命中即用。特殊安装（双登录要钉源、
-      // 异形路径）用下面 8 个显式键钉死，详见 README codebuddy 一节与 src/config.ts:48-88。
+      // 留空全自动探测；特殊安装才需显式键，见 README codebuddy 一节。
       "userAgent": "all2api/0.1",
-      // models 仅展示（/v1/models 输出）；腾讯网关无模型目录接口，拉不到时用此表。
+      // 仅展示（/v1/models），拉不到时用此表。
       "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
-      // "authDir": "",        // auth 目录或单个 *.info 覆盖
-      // "electronPath": "",   // Electron 二进制覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先）
-      // "electronBinary": "", // electronPath 的别名；两者都填时 electronPath 优先
-      // "keyBinding": "",     // at-rest 密钥 linked-binding 名覆盖
-      // "vscdbPath": "",      // state.vscdb 路径覆盖（CODEBUDDY_VSCDB 环境变量优先）
-      // "vscdbKey": "",       // vscdb 键名（默认 planning-genie.new.accessTokencn）
-      // "vscdbApp": "",       // 钥匙环应用名（默认 CodeBuddy CN）
-      // "vscdbDir": ""        // vscdb 应用目录名覆盖（默认 CodeBuddy CN）
     }
   }
 }

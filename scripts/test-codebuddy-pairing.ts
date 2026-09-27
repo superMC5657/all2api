@@ -2,12 +2,24 @@
  * .info×二进制配对 fixture 测试（离线、无真值）：
  * 双 App 双 key 交叉（mismatch 自动落到正确对）、显式钉独占失败即抛、报错 tried 对。
  * 只打印 ok/FAIL 与计数，不打印密钥/token/明文（keyId 前4为任务允许的诊断信息）。
+ *
+ * 双系统兼容：
+ * - Linux：走真实 PATH + `#!/bin/sh` 假二进制 exec（原逻辑）。
+ * - Windows：autoAuthDirs 读 %LOCALAPPDATA%（忽略 XDG），listElectronBinaries
+ *   只认 ProgramFiles/.exe + 注册表（忽略 PATH），且假二进制不可直接 exec；
+ *   因此 Win 下用测试缝 __setElectronBinariesForTests /
+ *   __setAtRestKeyResolverForTests 注入内存映射（默认关闭，生产优先序不变）。
  */
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
-import { CodeBuddyCredentials, sealField } from "../src/providers/codebuddy/credentials.js";
+import {
+  CodeBuddyCredentials,
+  sealField,
+  __setAtRestKeyResolverForTests,
+  __setElectronBinariesForTests,
+} from "../src/providers/codebuddy/credentials.js";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string): void {
@@ -18,9 +30,23 @@ function check(name: string, cond: boolean, detail?: string): void {
   }
 }
 
+const isWin = process.platform === "win32";
+
 const FX = join(process.cwd(), "cbtest-run", `pair-fx-${process.pid}`);
 const savedEnv: Record<string, string | undefined> = {};
-for (const k of ["PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "HOME", "WORKBUDDY_ELECTRON_BIN", "WORKBUDDY_AUTH_FILE", "CODEBUDDY_VSCDB"]) {
+for (const k of [
+  "PATH",
+  "XDG_DATA_HOME",
+  "XDG_CONFIG_HOME",
+  "HOME",
+  "WORKBUDDY_ELECTRON_BIN",
+  "WORKBUDDY_AUTH_FILE",
+  "CODEBUDDY_VSCDB",
+  "LOCALAPPDATA",
+  "APPDATA",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+]) {
   savedEnv[k] = process.env[k];
 }
 const restoreEnv = (): void => {
@@ -28,6 +54,10 @@ const restoreEnv = (): void => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
+};
+const clearMocks = (): void => {
+  __setElectronBinariesForTests(undefined);
+  __setAtRestKeyResolverForTests(undefined);
 };
 
 const derive = (s: string): { key: Buffer; keyId: string } => {
@@ -38,7 +68,11 @@ const writeBin = (dir: string, name: string, secret: string): void => {
   mkdirSync(dir, { recursive: true });
   const p = join(dir, name);
   writeFileSync(p, `#!/bin/sh\nprintf '%s' '${JSON.stringify({ version: 1, atRestSecretKey: secret, binding: "fixture" })}'\n`);
-  chmodSync(p, 0o755);
+  try {
+    chmodSync(p, 0o755);
+  } catch {
+    // Windows 下 chmod 仅影响只读位，失败忽略（Win 走 mock resolver，不 exec）。
+  }
 };
 const writeInfo = (dir: string, name: string, key: Buffer, keyId: string, uid: string): void => {
   mkdirSync(dir, { recursive: true });
@@ -52,6 +86,33 @@ const writeInfo = (dir: string, name: string, key: Buffer, keyId: string, uid: s
     account: { uid, enterpriseId: `e-${uid}` },
   };
   writeFileSync(join(dir, name), JSON.stringify(doc));
+};
+
+/** 双系统 auth 指向：Linux 读 XDG，Win 读 LOCALAPPDATA，两边同时设置同一基址。 */
+const pointAuthAt = (base: string): void => {
+  process.env["XDG_DATA_HOME"] = base;
+  process.env["LOCALAPPDATA"] = base;
+};
+
+/** Win 用内存映射注入二进制列表 + 解析（不 exec）；Linux 不用（走真实 PATH exec）。 */
+const mockBinaries = (entries: Array<{ path: string; secret: string }>): void => {
+  __setElectronBinariesForTests(entries.map((e) => e.path));
+  __setAtRestKeyResolverForTests(async (binary: string) => {
+    const hit = entries.find((e) => e.path === binary);
+    if (!hit) throw new Error(`mock: unknown binary ${binary}`);
+    const { key, keyId } = derive(hit.secret);
+    return { key, keyId, binding: "fixture", binary };
+  });
+};
+/** 仅注入 resolver（被钉 electron 场景：列表保持被钉独占，不被 override 遮蔽）。 */
+const mockResolverOnly = (entries: Array<{ path: string; secret: string }>): void => {
+  __setElectronBinariesForTests(undefined);
+  __setAtRestKeyResolverForTests(async (binary: string) => {
+    const hit = entries.find((e) => e.path === binary);
+    if (!hit) throw new Error(`mock: unknown binary ${binary}`);
+    const { key, keyId } = derive(hit.secret);
+    return { key, keyId, binding: "fixture", binary };
+  });
 };
 
 try {
@@ -72,13 +133,28 @@ try {
   writeBin(bins1, "codebuddy", secretB); // 与 a.info 失配，须落到下一对
   writeBin(bins2, "workbuddy", secretA); // 与 a.info 配对命中
 
-  process.env["PATH"] = `${bins1}:${bins2}`;
-  process.env["XDG_DATA_HOME"] = dataHome;
+  pointAuthAt(dataHome);
   process.env["XDG_CONFIG_HOME"] = join(FX, "xconfig");
   process.env["HOME"] = join(FX, "home");
+  // Win 隔离：vscdb 默认读 %APPDATA%，二进制默认读 ProgramFiles/LOCALAPPDATA——全部钉到 fixture 内，不碰真机。
+  process.env["APPDATA"] = join(FX, "appdata");
+  process.env["ProgramFiles"] = join(FX, "pf");
+  process.env["ProgramFiles(x86)"] = join(FX, "pf86");
   delete process.env["WORKBUDDY_ELECTRON_BIN"];
   delete process.env["WORKBUDDY_AUTH_FILE"];
   delete process.env["CODEBUDDY_VSCDB"];
+
+  if (isWin) {
+    mockBinaries([
+      { path: join(bins1, "codebuddy"), secret: secretB },
+      { path: join(bins2, "workbuddy"), secret: secretA },
+    ]);
+    // PATH 仅作意图保留（Win 自动探测忽略 PATH，以 mock 为准）；保留原 PATH 避免丢系统目录。
+    process.env["PATH"] = [bins1, bins2, savedEnv["PATH"] ?? ""].filter(Boolean).join(delimiter);
+  } else {
+    clearMocks();
+    process.env["PATH"] = [bins1, bins2].join(delimiter);
+  }
 
   // 1. 交叉配对：(a.info × codebuddy→B) mismatch → (a.info × workbuddy→A) 命中
   const creds = new CodeBuddyCredentials(undefined, undefined, "test/0.1");
@@ -125,10 +201,17 @@ try {
   const onlyA = join(FX, "onlya", "CodeBuddyExtension", "Data", "Public", "auth");
   mkdirSync(onlyA, { recursive: true });
   writeInfo(onlyA, "a.info", keyA, keyIdA, "uid-a");
-  process.env["XDG_DATA_HOME"] = join(FX, "onlya");
+  pointAuthAt(join(FX, "onlya"));
   const pinnedBinDir = join(FX, "pinned-bin");
   writeBin(pinnedBinDir, "pinned-elect", secretB);
-  process.env["WORKBUDDY_ELECTRON_BIN"] = join(pinnedBinDir, "pinned-elect");
+  const pinnedElectPath = join(pinnedBinDir, "pinned-elect");
+  process.env["WORKBUDDY_ELECTRON_BIN"] = pinnedElectPath;
+  if (isWin) {
+    // 被钉独占：只 mock 解析，不覆盖列表（列表须为被钉项本身）。
+    mockResolverOnly([{ path: pinnedElectPath, secret: secretB }]);
+  } else {
+    clearMocks();
+  }
   const eCreds = new CodeBuddyCredentials(undefined, undefined, "test/0.1");
   try {
     await eCreds.get();
@@ -152,10 +235,17 @@ try {
     join(onlyBad, "bad.info"),
     JSON.stringify({ auth: { accessToken: sealField(keyA, envKeyId, "x"), refreshToken: "r" } }),
   );
-  process.env["XDG_DATA_HOME"] = join(FX, "onlybad");
+  pointAuthAt(join(FX, "onlybad"));
   const soloBin = join(FX, "solobin");
   writeBin(soloBin, "workbuddy", secretB);
-  process.env["PATH"] = soloBin;
+  const soloPath = join(soloBin, "workbuddy");
+  if (isWin) {
+    mockBinaries([{ path: soloPath, secret: secretB }]);
+    process.env["PATH"] = [soloBin, savedEnv["PATH"] ?? ""].filter(Boolean).join(delimiter);
+  } else {
+    clearMocks();
+    process.env["PATH"] = soloBin;
+  }
   const tCreds = new CodeBuddyCredentials(undefined, undefined, "test/0.1");
   try {
     await tCreds.get();
@@ -173,6 +263,7 @@ try {
     );
   }
 } finally {
+  clearMocks();
   restoreEnv();
   rmSync(FX, { recursive: true, force: true });
 }

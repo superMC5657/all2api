@@ -55,7 +55,7 @@ try {
   const fullKey = 'secret://{"extensionId":"tencent-cloud.coding-copilot","key":"planning-genie.new.accessTokencn"}';
   const dbPath = join(FX, "state.vscdb");
   execFileSync(
-    "python3",
+    "python",
     [
       "-c",
       "import sqlite3,sys; db,k,v=sys.argv[1],sys.argv[2],sys.argv[3]; con=sqlite3.connect(db); con.execute('CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value TEXT)'); con.execute('INSERT INTO ItemTable VALUES(?,?)',(k,v)); con.commit(); con.close()",
@@ -84,7 +84,7 @@ try {
   const blob2 = Buffer.concat([Buffer.from("v11", "ascii"), c2.update(Buffer.from(JSON.stringify(doc2), "utf8")), c2.final()]);
   const db2 = join(FX, "state2.vscdb");
   execFileSync(
-    "python3",
+    "python",
     [
       "-c",
       "import sqlite3,sys; db,k,v=sys.argv[1],sys.argv[2],sys.argv[3]; con=sqlite3.connect(db); con.execute('CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value TEXT)'); con.execute('INSERT INTO ItemTable VALUES(?,?)',(k,v)); con.commit(); con.close()",
@@ -130,13 +130,13 @@ try {
     __setVscdbExecForTests(async (cmd, args) => {
       const script = String(args[1] ?? "");
       calls.push(`${cmd}:${script.includes("secretstorage") ? "ss" : script.includes("org.freedesktop.secrets") ? "dbus" : "?"}`);
-      if (cmd === "python3" && script.includes("secretstorage")) mockFail("python3 failed (1): No module named 'secretstorage'");
-      if (cmd === "python3") return { stdout: fx.toString("base64"), stderr: "" };
+      if (cmd === "python" && script.includes("secretstorage")) mockFail(`${cmd} failed (1): No module named 'secretstorage'`);
+      if (cmd === "python") return { stdout: fx.toString("base64"), stderr: "" };
       return mockFail(`${cmd} not mocked`, 127);
     });
     try {
       const got = await readKeyringSecret(`FixtureApp-dbus-${suffix()}`, 25_000);
-      check("fallback to python3+dbus when secretstorage missing", got.equals(fx) && calls[0] === "python3:ss", calls.join(","));
+      check("fallback to python+dbus when secretstorage missing", got.equals(fx) && calls[0] === "python:ss", calls.join(","));
     } finally {
       __setVscdbExecForTests();
     }
@@ -147,7 +147,7 @@ try {
     const hexes = [...fx].map((b) => `0x${b.toString(16).padStart(2, "0")}`).join(", ");
     __setVscdbExecForTests(async (cmd, args) => {
       const flat = args.join(" ");
-      if (cmd === "python3") return mockFail("python3 failed (1): missing", 1);
+      if (cmd === "python") return mockFail(`${cmd} failed (1): missing`, 1);
       if (flat.includes("OpenSession")) return { stdout: "('', objectpath '/org/freedesktop/secrets/session/s9')", stderr: "" };
       if (flat.includes("Collections")) return { stdout: "([objectpath '/org/freedesktop/secrets/collection/login'],)", stderr: "" };
       if (flat.includes("Items")) return { stdout: "([objectpath '/org/freedesktop/secrets/collection/login/1'],)", stderr: "" };

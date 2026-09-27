@@ -146,7 +146,7 @@ export function __setVscdbExecForTests(fn?: VscdbExecFn): void {
 async function readKeyringViaSecretStorage(app: string, timeoutMs: number): Promise<Buffer> {
   let out: { stdout: string | Buffer };
   try {
-    out = await execImpl("python3", ["-c", SECRET_STORAGE_SCRIPT, app], timeoutMs);
+    out = await execImpl("python", ["-c", SECRET_STORAGE_SCRIPT, app], timeoutMs);
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`no keyring item (Chromium Safe Storage / ${app})`);
     throw e;
@@ -193,7 +193,7 @@ sys.exit(0 if found else 3)
 async function readKeyringViaDbus(app: string, timeoutMs: number): Promise<Buffer> {
   let out: { stdout: string | Buffer };
   try {
-    out = await execImpl("python3", ["-c", DBUS_DIRECT_SCRIPT, app], timeoutMs);
+    out = await execImpl("python", ["-c", DBUS_DIRECT_SCRIPT, app], timeoutMs);
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`no keyring item (Chromium Safe Storage / ${app})`);
     throw e;
@@ -340,11 +340,11 @@ sys.stdout.write(hit if isinstance(hit, str) else hit.decode("utf-8", "replace")
 /** 读 ItemTable 原始值文本（python3 子进程，sqlite 只读 URI）。 */
 export async function readVscdbValue(dbPath: string, key: string, timeoutMs = 15_000): Promise<string> {
   try {
-    const out = await execImpl("python3", ["-c", READ_SCRIPT, dbPath, key], timeoutMs);
+    const out = await execImpl("python", ["-c", READ_SCRIPT, dbPath, key], timeoutMs);
     return String(out.stdout).replace(/\n$/, "");
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`vscdb key ${key} not found in ${dbPath}`);
-    throw new Error(`vscdb read failed (${dbPath}): ${(e as Error).message} — requires python3`);
+    throw new Error(`vscdb read failed (${dbPath}): ${(e as Error).message} — requires python`);
   }
 }
 

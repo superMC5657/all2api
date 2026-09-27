@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 
 import { readVscdbAuth, type VscdbSourceOptions } from "./vscdb.js";
 
@@ -200,7 +200,7 @@ function windowsElectronDefaults(): string[] {
 /** Linux 下 PATH 扫描（等价于 `which <name>`，不额外拉起进程）。 */
 function pathLookup(names: string[]): string[] {
   const out: string[] = [];
-  const dirs = (process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin").split(":");
+  const dirs = (process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin").split(delimiter);
   for (const name of names) {
     for (const dir of dirs) {
       if (!dir) continue;
@@ -332,6 +332,10 @@ export async function listElectronBinaries(configured?: string): Promise<string[
     }
     return [pinned];
   }
+  // 测试缝（默认关闭）：仅覆盖自动探测分支，被钉分支保持独占语义不变。
+  if (electronBinariesOverride !== undefined) {
+    return [...electronBinariesOverride];
+  }
   const ordered =
     process.platform === "linux"
       ? [...linuxElectronCandidates()]
@@ -361,6 +365,21 @@ export interface AtRestKey {
 export interface ResolvedAtRestKey extends AtRestKey {
   binding: string;
   binary: string;
+}
+
+// ---------- 测试缝（默认关闭，不改默认探测优先序） ----------
+
+/** 自动探测二进制列表覆盖（undefined=关闭；被钉分支不受影响，保持独占）。 */
+let electronBinariesOverride: string[] | undefined;
+export function __setElectronBinariesForTests(list?: string[]): void {
+  electronBinariesOverride = list ? [...list] : undefined;
+}
+
+/** 单二进制 at-rest 解析覆盖（undefined=关闭；关闭时走真实 Electron helper）。 */
+export type AtRestKeyResolverFn = (binary: string) => Promise<ResolvedAtRestKey>;
+let atRestKeyResolverOverride: AtRestKeyResolverFn | undefined;
+export function __setAtRestKeyResolverForTests(fn?: AtRestKeyResolverFn): void {
+  atRestKeyResolverOverride = fn;
 }
 
 /**
@@ -422,6 +441,9 @@ export class AtRestKeyProvider {
   }
 
   private async resolveWith(binary: string): Promise<ResolvedAtRestKey> {
+    if (atRestKeyResolverOverride) {
+      return atRestKeyResolverOverride(binary);
+    }
     const helper = buildKeyHelperScript(this.keyBinding);
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
