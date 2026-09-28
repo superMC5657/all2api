@@ -40,14 +40,26 @@ export class QoderProvider implements ProviderAdapter {
         const json = (await res.json()) as { data?: Array<{ id?: string }> };
         const ids = (json.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id));
         if (ids.length > 0) {
-          this.modelsCache = { at: Date.now(), ids };
-          return ids;
+          const filtered = this.applyAllowList(ids);
+          this.modelsCache = { at: Date.now(), ids: filtered };
+          return filtered;
         }
       }
     } catch {
       // 回退到下方的静态列表
     }
     return this.modelsFallback;
+  }
+
+  /**
+   * config.models 白名单过滤（与 codebuddy 语义对齐）：
+   * - 为空 = 不限制，直接暴露动态目录；
+   * - 非空 = 动态目录 ∩ config.models，只暴露交集，隐藏已下线/未授权模型。
+   */
+  private applyAllowList(ids: string[]): string[] {
+    if (this.modelsFallback.length === 0) return ids;
+    const allow = new Set(this.modelsFallback);
+    return ids.filter((id) => allow.has(id));
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
