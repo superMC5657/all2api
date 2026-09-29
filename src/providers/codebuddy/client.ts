@@ -50,7 +50,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
     if (!body["stream_options"]) body["stream_options"] = { include_usage: true };
     sanitizeToolChoice(body);
 
-    const res = await this.send(JSON.stringify(body));
+    const res = await this.send(JSON.stringify(body), { stream: clientWantsStream });
     if (!res.ok) {
       return { status: res.status, contentType: res.headers.get("content-type") ?? "application/json", body: await res.text() };
     }
@@ -68,7 +68,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
     if (!openaiBody["stream_options"]) openaiBody["stream_options"] = { include_usage: true };
     sanitizeToolChoice(openaiBody);
 
-    const res = await this.send(JSON.stringify(openaiBody));
+    const res = await this.send(JSON.stringify(openaiBody), { stream: clientWantsStream });
     if (!res.ok) {
       return { status: res.status, contentType: res.headers.get("content-type") ?? "application/json", body: await res.text() };
     }
@@ -83,21 +83,29 @@ export class CodeBuddyProvider implements ProviderAdapter {
     return { status: 200, contentType: "application/json", body: JSON.stringify(openAIToAnthropicResponse(aggregated, model)) };
   }
 
-  private async send(body: string): Promise<Response> {
+  private async send(body: string, opts: { stream: boolean }): Promise<Response> {
+    // 流式请求不设整体超时，由客户端断连驱动取消；非流式保留超时。
+    // 注意：每次 fetch 前新建 AbortSignal——AbortSignal.timeout 从创建起点计时，
+    // 复用首次的 signal 会导致 401 重试时立即 TimeoutError（误报 502）。
+    const makeSignal = () => (opts.stream ? undefined : AbortSignal.timeout(this.timeoutMs));
     const headers = await this.credentials.headers();
+    const signal = makeSignal();
     let res = await fetch(this.chatUrl, {
       method: "POST",
       headers,
       body,
-      signal: AbortSignal.timeout(this.timeoutMs),
+      ...(signal ? { signal } : {}),
     });
     if (res.status === 401) {
+      // 重试前消费掉旧响应体，避免 socket 泄漏。
+      await res.body?.cancel();
       await this.credentials.refresh();
+      const retrySignal = makeSignal();
       res = await fetch(this.chatUrl, {
         method: "POST",
         headers: await this.credentials.headers(),
         body,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        ...(retrySignal ? { signal: retrySignal } : {}),
       });
     }
     return res;
@@ -116,11 +124,14 @@ export class CodeBuddyProvider implements ProviderAdapter {
 function sanitizeToolChoice(body: Record<string, unknown>): void {
   const choice = body["tool_choice"];
   if (choice === undefined) return;
-  if (typeof choice === "string") return;
+  // 合法字符串原样透传。
+  if (choice === "auto" || choice === "none" || choice === "required") return;
   if (choice === null) {
     delete body["tool_choice"];
     return;
   }
+  // translate 只产出 { type: "function" }（按名强制，无名称字段）；上游不支持按名强制，
+  // 与其他对象形式一律降级为 "required"——模型仍能看到 tools 并自行选择其一。
   body["tool_choice"] = "required";
 }
 

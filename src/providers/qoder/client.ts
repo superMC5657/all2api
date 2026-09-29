@@ -63,7 +63,8 @@ export class QoderProvider implements ProviderAdapter {
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
-    const res = await this.upstream(rewriteModel(rawBody, model));
+    const wantsStream = extractStreamFlag(rawBody);
+    const res = await this.upstream(rewriteModel(rawBody, model), { stream: wantsStream });
     return toUpstreamResult(res);
   }
 
@@ -73,8 +74,12 @@ export class QoderProvider implements ProviderAdapter {
     const openaiBody = anthropicToOpenAI(req);
     const wantsStream = extractStreamFlag(rawBody) || openaiBody.stream === true;
     openaiBody.stream = wantsStream;
+    // 对齐 codebuddy：缺省即附带 stream_options（非流时上游忽略），流式时用于要求上游附带 usage 终帧。
+    if (!((openaiBody as Record<string, unknown>)["stream_options"])) {
+      (openaiBody as Record<string, unknown>)["stream_options"] = { include_usage: true };
+    }
 
-    const res = await this.upstream(JSON.stringify(openaiBody));
+    const res = await this.upstream(JSON.stringify(openaiBody), { stream: wantsStream });
 
     if (!res.ok || res.body === null) {
       return { status: res.status, contentType: res.headers.get("content-type") ?? "application/json", body: await res.text() };
@@ -90,12 +95,14 @@ export class QoderProvider implements ProviderAdapter {
     };
   }
 
-  private upstream(body: string): Promise<Response> {
+  private upstream(body: string, opts: { stream: boolean }): Promise<Response> {
+    // 流式请求不设整体超时，由客户端断连驱动取消；非流式保留超时。
+    const signal = opts.stream ? undefined : AbortSignal.timeout(this.timeoutMs);
     return fetch(`${this.bridge.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.bridge.apiKey}` },
       body,
-      signal: AbortSignal.timeout(this.timeoutMs),
+      ...(signal ? { signal } : {}),
     });
   }
 }
