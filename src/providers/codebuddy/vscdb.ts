@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { resolvePythonBin } from "../../python.js";
 import type { CodeBuddyAuth } from "./credentials.js";
 
 /**
@@ -16,7 +17,7 @@ import type { CodeBuddyAuth } from "./credentials.js";
  *   dkLen=16) 为 key 做 AES-128-CBC（IV=16×0x20），PKCS7 去填充得 UTF8-JSON；
  * - keyringSecret 取自 Login 钥匙环中 label=`Chromium Safe Storage`、
  *   xdg:schema=`chrome_libsecret_os_crypt_password_v2`、application=`CodeBuddy CN` 的项，
- *   链路顺序 python3+secretstorage → python3+dbus 直调 → gdbus CLI → secret-tool
+ *   链路顺序 python+secretstorage → python+dbus 直调 → gdbus CLI → secret-tool
  *  （单链路 8s、整链 25s，任一命中即停）。
  *
  * v1 只读：从不写 SQLite（IDE 可能持锁）；refresh = 内存重读。
@@ -67,8 +68,8 @@ export function resolveVscdbPath(configured?: string, vscdbDir?: string): string
 
 const secretCache = new Map<string, Buffer>();
 
-/** 链路顺序：python3+secretstorage → python3+dbus → gdbus → secret-tool（任一命中即停）。 */
-export const KEYRING_LINK_NAMES = ["python3+secretstorage", "python3+dbus", "gdbus", "secret-tool"] as const;
+/** 链路顺序：python+secretstorage → python+dbus → gdbus → secret-tool（任一命中即停）。 */
+export const KEYRING_LINK_NAMES = ["python+secretstorage", "python+dbus", "gdbus", "secret-tool"] as const;
 /** 单链路子进程超时 8s，整链总预算默认 25s（避免 D-Bus 无响应拖住请求）。 */
 export const KEYRING_LINK_TIMEOUT_MS = 8_000;
 export const KEYRING_TOTAL_TIMEOUT_MS = 25_000;
@@ -143,10 +144,29 @@ export function __setVscdbExecForTests(fn?: VscdbExecFn): void {
   execImpl = fn ?? execCapture;
 }
 
+/**
+ * 经统一解析的 python 执行：resolver 抛错（无解释器）时不向外冒泡成
+ * "整链异常"，而是转成 code=ENOENT 的拒绝——与 execFile 找不到可执行文件
+ * 的原有语义一致，调用方照常按链路失败继续降级（gdbus / secret-tool）。
+ */
+function execPython(
+  args: string[],
+  timeoutMs: number,
+  opts?: { encoding?: "buffer" },
+): Promise<{ stdout: string | Buffer; stderr: string }> {
+  let cmd: string;
+  try {
+    cmd = resolvePythonBin();
+  } catch (e) {
+    return Promise.reject(Object.assign(new Error((e as Error).message), { code: "ENOENT" }));
+  }
+  return execImpl(cmd, args, timeoutMs, opts);
+}
+
 async function readKeyringViaSecretStorage(app: string, timeoutMs: number): Promise<Buffer> {
   let out: { stdout: string | Buffer };
   try {
-    out = await execImpl("python", ["-c", SECRET_STORAGE_SCRIPT, app], timeoutMs);
+    out = await execPython(["-c", SECRET_STORAGE_SCRIPT, app], timeoutMs);
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`no keyring item (Chromium Safe Storage / ${app})`);
     throw e;
@@ -189,11 +209,11 @@ for cpath in sprops.Get("org.freedesktop.Secret.Service", "Collections"):
 sys.exit(0 if found else 3)
 `;
 
-/** 后备A：python3 + dbus-python 直调 Secret Service（secret 经 stdout 一次性 base64 输出，不落盘）。 */
+/** 后备A：python + dbus-python 直调 Secret Service（secret 经 stdout 一次性 base64 输出，不落盘）。 */
 async function readKeyringViaDbus(app: string, timeoutMs: number): Promise<Buffer> {
   let out: { stdout: string | Buffer };
   try {
-    out = await execImpl("python", ["-c", DBUS_DIRECT_SCRIPT, app], timeoutMs);
+    out = await execPython(["-c", DBUS_DIRECT_SCRIPT, app], timeoutMs);
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`no keyring item (Chromium Safe Storage / ${app})`);
     throw e;
@@ -284,8 +304,8 @@ export async function readKeyringSecret(app: string, totalMs = KEYRING_TOTAL_TIM
   const budget = Math.max(1_000, Math.min(totalMs, KEYRING_TOTAL_TIMEOUT_MS));
   const deadline = Date.now() + budget;
   const links: Array<{ name: (typeof KEYRING_LINK_NAMES)[number]; run: (linkMs: number) => Promise<Buffer> }> = [
-    { name: "python3+secretstorage", run: (ms) => readKeyringViaSecretStorage(app, ms) },
-    { name: "python3+dbus", run: (ms) => readKeyringViaDbus(app, ms) },
+    { name: "python+secretstorage", run: (ms) => readKeyringViaSecretStorage(app, ms) },
+    { name: "python+dbus", run: (ms) => readKeyringViaDbus(app, ms) },
     { name: "gdbus", run: (ms) => readKeyringViaGdbus(app, ms) },
     { name: "secret-tool", run: (ms) => readKeyringViaSecretTool(app, ms) },
   ];
@@ -337,10 +357,10 @@ if hit is None:
 sys.stdout.write(hit if isinstance(hit, str) else hit.decode("utf-8", "replace"))
 `;
 
-/** 读 ItemTable 原始值文本（python3 子进程，sqlite 只读 URI）。 */
+/** 读 ItemTable 原始值文本（python 子进程，sqlite 只读 URI）。 */
 export async function readVscdbValue(dbPath: string, key: string, timeoutMs = 15_000): Promise<string> {
   try {
-    const out = await execImpl("python", ["-c", READ_SCRIPT, dbPath, key], timeoutMs);
+    const out = await execPython(["-c", READ_SCRIPT, dbPath, key], timeoutMs);
     return String(out.stdout).replace(/\n$/, "");
   } catch (e) {
     if ((e as { code?: unknown }).code === 3) throw new Error(`vscdb key ${key} not found in ${dbPath}`);
@@ -416,11 +436,17 @@ export function mapVscdbAuth(doc: Record<string, unknown>): CodeBuddyAuth {
   const fail = (what: string): never => {
     throw new Error(`vscdb auth invalid: ${what}`);
   };
-  const at = doc["accessToken"];
+  // 双形态：新版 IDE 把令牌包在顶层 auth 对象里，旧版平铺在顶层；account 两种形态都在顶层。
+  const authRaw: unknown = doc["auth"];
+  const src: Record<string, unknown> =
+    typeof authRaw === "object" && authRaw !== null && !Array.isArray(authRaw)
+      ? (authRaw as Record<string, unknown>)
+      : doc;
+  const at = src["accessToken"];
   let accessToken: string | undefined;
   if (typeof at === "string" && at.startsWith("eyJ") && at.length > 16) accessToken = at;
   if (!accessToken) {
-    const tk: unknown = doc["token"];
+    const tk: unknown = src["token"];
     if (typeof tk !== "string" || tk.length === 0) {
       fail("neither accessToken (eyJ…) nor token fallback is a usable string");
     }
@@ -443,10 +469,10 @@ export function mapVscdbAuth(doc: Record<string, unknown>): CodeBuddyAuth {
       enterpriseId = entRaw as string;
     }
   }
-  const domainRaw: unknown = doc["domain"];
+  const domainRaw: unknown = src["domain"];
   const domain: unknown = domainRaw === undefined || domainRaw === "" ? VSCDB_DEFAULT_DOMAIN : domainRaw;
   if (typeof domain !== "string") fail("domain is not a string");
-  const expRaw: unknown = doc["expiresAt"];
+  const expRaw: unknown = src["expiresAt"];
   let expiresAt = 0;
   let expOk = false;
   if (typeof expRaw === "number" && Number.isFinite(expRaw)) {
@@ -457,7 +483,7 @@ export function mapVscdbAuth(doc: Record<string, unknown>): CodeBuddyAuth {
     expOk = true;
   }
   if (!expOk) fail("expiresAt is not a number");
-  const refreshToken: unknown = doc["refreshToken"];
+  const refreshToken: unknown = src["refreshToken"];
   if (typeof refreshToken !== "string") fail("refreshToken is not a string");
   return { accessToken: accessToken as string, refreshToken: refreshToken as string, expiresAt, domain: domain as string, enterpriseId, uid };
 }

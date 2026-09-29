@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { resolvePythonBin } from "../../python.js";
+
 /**
  * Qoder 桌面版 IDE 读取器（intl + CN）共用的 keystore 基础。
  *
@@ -567,7 +569,7 @@ function readQoderCnLinuxIdentity(authFile?: string): QoderIdeIdentity | null {
 }
 
 /**
- * 经系统 python3-gi 绑定从 gnome-keyring 按应用名单获取
+ * 经系统 python-gi 绑定从 gnome-keyring 按应用名单获取
  * Electron safeStorage 口令（不引入新依赖）。
  * 该密钥仅经管道进入内存——绝不记入日志。
  */
@@ -589,10 +591,21 @@ for coll in Secret.Service.get_collections(svc):
                 sys.exit(0)
 sys.exit(1)
 `;
-  const py = spawnSync("python3", ["-c", script], { timeout: 15_000, windowsHide: true });
-  if (py.status !== 0) return null;
-  const password = py.stdout.toString("utf8");
-  return password || null;
+  let bin: string;
+  try {
+    bin = resolvePythonBin();
+  } catch {
+    // 无解释器：走原失败路径（口令取不到 → 身份 null），绝不向调用方抛未捕获异常。
+    return null;
+  }
+  try {
+    const py = spawnSync(bin, ["-c", script], { timeout: 15_000, windowsHide: true });
+    if (py.status !== 0) return null;
+    const password = py.stdout?.toString("utf8") ?? "";
+    return password || null;
+  } catch {
+    return null;
+  }
 }
 
 /** CN IDE 的 gnome-keyring 口令（名单见 KEYRING_APPS；行为与抽取前一致）。 */

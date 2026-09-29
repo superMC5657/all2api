@@ -8,13 +8,19 @@ import { createCipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
+import { __setPythonBinForTests, __resetPythonBinForTests, resolvePythonBin } from "../src/python.js";
 import {
   __setVscdbExecForTests,
   mapVscdbAuth,
   readKeyringSecret,
   readVscdbAuth,
+  readVscdbValue,
   resolveVscdbPath,
 } from "../src/providers/codebuddy/vscdb.js";
+
+// 固定解释器名（与下方按 cmd 名 mock 的用例及 fixture 生成的 `python` 一致）；
+// 避免测试机缺 python（仅有 python3）时 flake。
+__setPythonBinForTests("python");
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string): void {
@@ -175,11 +181,77 @@ try {
       const msg = (e as Error).message;
       check(
         "all-links-failed error lists links",
-        ["python3+secretstorage", "python3+dbus", "gdbus", "secret-tool"].every((n) => msg.includes(n)),
+        ["python+secretstorage", "python+dbus", "gdbus", "secret-tool"].every((n) => msg.includes(n)),
         msg.slice(0, 100),
       );
     } finally {
       __setVscdbExecForTests();
+    }
+  }
+
+  // 6. resolver：注入 / 缓存语义 / reset 恢复真实探测
+  {
+    __setPythonBinForTests("python-fixture-a");
+    check("resolver returns injected bin", resolvePythonBin() === "python-fixture-a");
+    __setPythonBinForTests("python-fixture-b");
+    check("resolver memo replaced by later injection", resolvePythonBin() === "python-fixture-b");
+    __resetPythonBinForTests();
+    let real = "";
+    try {
+      real = resolvePythonBin();
+    } catch {
+      real = "";
+    }
+    check(
+      "resolver after reset probes real candidates",
+      real === "" || ["python", "python3"].includes(real),
+      `resolved=${real || "<none>"}`,
+    );
+    __setPythonBinForTests("python"); // 恢复固定值，保持其余用例确定性
+  }
+
+  // 7. resolver 抛错（无解释器）→ python 链路按失败处理，整链继续落到 gdbus
+  {
+    const fx = randomBytes(12);
+    const hexes = [...fx].map((b) => `0x${b.toString(16).padStart(2, "0")}`).join(", ");
+    const calls: string[] = [];
+    __setVscdbExecForTests(async (cmd, args) => {
+      const flat = args.join(" ");
+      calls.push(cmd);
+      if (cmd === "python" || cmd === "python3") return mockFail(`${cmd} failed (1): must not run (no resolver hit)`, 1);
+      if (flat.includes("OpenSession")) return { stdout: "('', objectpath '/org/freedesktop/secrets/session/s9')", stderr: "" };
+      if (flat.includes("Collections")) return { stdout: "([objectpath '/org/freedesktop/secrets/collection/login'],)", stderr: "" };
+      if (flat.includes("Items")) return { stdout: "([objectpath '/org/freedesktop/secrets/collection/login/1'],)", stderr: "" };
+      if (flat.includes("Label")) return { stdout: "(<'Chromium Safe Storage'>,)", stderr: "" };
+      if (flat.includes("Attributes"))
+        return { stdout: `(<{'application': <'FixtureApp-nopy'>, 'xdg:schema': <'chrome_libsecret_os_crypt_password_v2'>}>,)`, stderr: "" };
+      if (flat.includes("GetSecret"))
+        return { stdout: `((objectpath '/org/freedesktop/secrets/session/s9', [], [byte ${hexes}], 'text/plain'),)`, stderr: "" };
+      return mockFail(`${cmd} not mocked`, 127);
+    });
+    __setPythonBinForTests(null);
+    try {
+      const got = await readKeyringSecret("FixtureApp-nopy", 25_000);
+      check(
+        "resolver-missing → link failure → gdbus hit (python never spawned)",
+        got.equals(fx) && !calls.some((c) => c === "python" || c === "python3"),
+        calls.join(","),
+      );
+
+      // 同一缺失状态下的第三条 python 链路（vscdb 读）：走原失败路径，不冒泡未捕获异常
+      try {
+        await readVscdbValue(join(FX, "state.vscdb"), "planning-genie.new.accessTokencn", 3000);
+        check("resolver-missing readVscdbValue throws", false);
+      } catch (e) {
+        check(
+          "resolver-missing readVscdbValue → 'requires python' failure path",
+          (e as Error).message.includes("vscdb read failed") && (e as Error).message.includes("requires python"),
+          (e as Error).message.slice(0, 120),
+        );
+      }
+    } finally {
+      __setVscdbExecForTests();
+      __setPythonBinForTests("python");
     }
   }
 } finally {

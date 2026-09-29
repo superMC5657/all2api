@@ -11,6 +11,7 @@ pnpm start
 ```
 
 > 配置文件只认 `config.jsonc`；旧 `config.json` 仅在 jsonc 缺失时回落加载（会 warn 提示迁移）。
+> 依赖：Node + pnpm；钥匙环读取需 `python`/`python3` 二选一（Ubuntu 通常只有 `python3`，启动时自动解析）。
 
 ## 接入
 
