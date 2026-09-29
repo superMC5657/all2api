@@ -67,7 +67,7 @@ check("thinking block first", anthropicJson.content[0]?.type === "thinking" && a
 check("text block", anthropicJson.content[1]?.type === "text" && anthropicJson.content[1]?.text === "partial");
 check("tool_use parsed input", anthropicJson.content[2]?.type === "tool_use" && JSON.stringify(anthropicJson.content[2]?.input) === '{"city":"SF"}');
 check("stop_reason tool_use", anthropicJson.stop_reason === "tool_use");
-check("usage mapped", anthropicJson.usage["input_tokens"] === 11 && anthropicJson.usage["output_tokens"] === 7);
+check("usage mapped", anthropicJson.usage["input_tokens"] === 8 && anthropicJson.usage["output_tokens"] === 7 && anthropicJson.usage["cache_read_input_tokens"] === 3);
 
 // 3. 流式转译
 async function collectStream(stream: ReadableStream<Uint8Array>): Promise<string> {
