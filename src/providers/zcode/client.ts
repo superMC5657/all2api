@@ -58,6 +58,40 @@ function badRequest(message: string): UpstreamResult {
   };
 }
 
+/** 上游 4xx 透传体 → OpenAI 错误形（保留原 status；captcha/429/5xx 的 throw 路径不受影响）。 */
+function upstreamErrorToOpenai(status: number, text: string): UpstreamResult {
+  let message = text;
+  let type = "upstream_error";
+  const trimmed = text.trim();
+  if (trimmed) {
+    try {
+      const data: unknown = JSON.parse(trimmed);
+      if (data != null && typeof data === "object" && !Array.isArray(data)) {
+        const rec = data as Record<string, any>;
+        const err = rec["error"];
+        if (err != null && typeof err === "object" && !Array.isArray(err)) {
+          const e = err as Record<string, any>;
+          if (typeof e["message"] === "string" && e["message"]) message = e["message"] as string;
+          if (typeof e["type"] === "string" && e["type"]) type = e["type"] as string;
+        } else if (typeof rec["message"] === "string" && (rec["message"] as string)) {
+          message = rec["message"] as string;
+          if (typeof rec["type"] === "string" && (rec["type"] as string)) type = rec["type"] as string;
+        } else if (typeof rec["detail"] === "string" && (rec["detail"] as string)) {
+          message = rec["detail"] as string;
+        }
+      }
+    } catch {
+      // 非 JSON：原文透传
+    }
+  }
+  if (!message.trim()) message = `upstream error ${status}`;
+  return {
+    status,
+    contentType: "application/json",
+    body: JSON.stringify({ error: { message, type } }),
+  };
+}
+
 async function readStreamText(stream: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -209,6 +243,11 @@ export class ZCodeProvider implements ProviderAdapter {
 
     const stream = record["stream"] === true;
     const upstream = await this.dispatchAnthropic(body);
+    // H5：上游 4xx 透传一律转 OpenAI 错误形、原 status 返回（流/非流同理：错误走 JSON 而非 SSE）。
+    if (upstream.status >= 400) {
+      const text = typeof upstream.body === "string" ? upstream.body : await readStreamText(upstream.body);
+      return upstreamErrorToOpenai(upstream.status, text);
+    }
     if (!stream) {
       const text = typeof upstream.body === "string" ? upstream.body : await readStreamText(upstream.body);
       let data: unknown;
@@ -230,26 +269,20 @@ export class ZCodeProvider implements ProviderAdapter {
       };
     }
     if (typeof upstream.body === "string") {
-      // 上游非流式回包却被要求流式：合成单 chunk SSE，保证协议不断
+      // 上游非流式回包却被要求流式：经 StreamConverter 合成完整 SSE（含 tool_calls 与 finish chunk）
       const conv = new StreamConverter(model);
-      let sse = conv.start();
+      let sse: string;
       try {
         const data = JSON.parse(upstream.body) as Record<string, any>;
-        const openai = anthropicToOpenai(data, model);
-        const content = openai?.["choices"]?.[0]?.["message"]?.["content"];
-        if (typeof content === "string" && content) {
-          sse += `data: ${JSON.stringify({
-            id: openai["id"],
-            object: "chat.completion.chunk",
-            created: openai["created"],
-            model,
-            choices: [{ index: 0, delta: { content }, finish_reason: null }],
-          })}\n\n`;
+        // 中-7：上游 200 携带 {"error":...} 时不合成空内容 stop 流，走 OpenAI 错误 JSON（对齐 codebuddy H2）。
+        if (data != null && typeof data === "object" && !Array.isArray(data) && data["error"] != null) {
+          return upstreamErrorToOpenai(upstream.status, upstream.body);
         }
+        sse = conv.synthesize(data);
       } catch {
         // 解析失败则只发首尾空流
+        sse = conv.start() + conv.done();
       }
-      sse += conv.done();
       return { status: upstream.status, contentType: "text/event-stream", body: sse };
     }
     return {

@@ -223,6 +223,8 @@ const STOP_REASON_MAP: Record<string, string> = {
   stop_sequence: "stop",
   max_tokens: "length",
   tool_use: "tool_calls",
+  refusal: "content_filter",
+  // pause_turn 等未知值未显式映射，有意 fallback 到 "stop"（见各使用处的 ?? "stop"）。
 };
 
 function asInt(value: unknown): number | null {
@@ -364,16 +366,24 @@ export function openaiToAnthropic(
       const text = textFromContent(content);
       if (text) systemParts.push(text);
     } else if (role === "tool") {
-      outMsgs.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: String(record["tool_call_id"] ?? ""),
-            content: textFromContent(content),
-          },
-        ],
-      });
+      const block = {
+        type: "tool_result",
+        tool_use_id: String(record["tool_call_id"] ?? ""),
+        content: textFromContent(content),
+      };
+      // 连续 tool 消息合并为一条 user 消息的多 tool_result 块
+      const prev = outMsgs[outMsgs.length - 1];
+      if (
+        prev != null &&
+        prev["role"] === "user" &&
+        Array.isArray(prev["content"]) &&
+        (prev["content"] as Array<Record<string, any>>).length > 0 &&
+        (prev["content"] as Array<Record<string, any>>).every((b) => b != null && b["type"] === "tool_result")
+      ) {
+        (prev["content"] as Array<Record<string, any>>).push(block);
+      } else {
+        outMsgs.push({ role: "user", content: [block] });
+      }
     } else if (role === "assistant") {
       const blocks: Array<Record<string, any>> = [];
       const text = textFromContent(content);
@@ -627,6 +637,69 @@ export class StreamConverter {
       return [this.chunk({}, this.finishReason)];
     }
     return []; // content_block_stop / message_stop / ping / error 等无需产出
+  }
+
+  /**
+   * 非流式 Anthropic 完整响应 → OpenAI SSE 全量合成（含文本/tool_calls/finish chunk）。
+   * 供上游非流式却被要求流式时使用：首 role chunk + 内容 chunks + finish chunk + [DONE]。
+   * finish chunk 携带 STOP_REASON_MAP 映射后原因（含 refusal→content_filter，未知 fallback stop）。
+   */
+  synthesize(data: Record<string, any>): string {
+    if (typeof data["id"] === "string" && (data["id"] as string)) this.chunkId = String(data["id"]);
+    const usage = (data["usage"] as Record<string, any> | undefined) ?? {};
+    const prompt = asInt(usage["input_tokens"]);
+    if (prompt != null) this.usage.prompt_tokens = prompt;
+    const completion = asInt(usage["output_tokens"]);
+    if (completion != null) this.usage.completion_tokens = completion;
+    this.syncUsageTotal();
+
+    let out = this.start();
+    const textParts: string[] = [];
+    const thinkingParts: string[] = [];
+    const toolCalls: Array<{ id: string; name: string; args: string }> = [];
+    const content = data["content"];
+    if (Array.isArray(content)) {
+      for (const item of content) {
+        if (item == null || typeof item !== "object") continue;
+        const b = item as Record<string, any>;
+        if (b["type"] === "text" && typeof b["text"] === "string" && (b["text"] as string)) {
+          textParts.push(b["text"] as string);
+        } else if (b["type"] === "thinking" && typeof b["thinking"] === "string" && (b["thinking"] as string)) {
+          thinkingParts.push(b["thinking"] as string);
+        } else if (b["type"] === "redacted_thinking") {
+          const redacted = b["data"] ?? b["thinking"];
+          if (typeof redacted === "string" && redacted) thinkingParts.push(redacted);
+        } else if (b["type"] === "tool_use") {
+          toolCalls.push({
+            id: String(b["id"] ?? ""),
+            name: String(b["name"] ?? ""),
+            args: JSON.stringify(b["input"] ?? {}),
+          });
+        }
+      }
+    }
+    const reasoningText = thinkingParts.join("");
+    if (reasoningText) out += this.chunk({ reasoning_content: reasoningText });
+    const text = textParts.join("");
+    if (text) out += this.chunk({ content: text });
+    toolCalls.forEach((tc, idx) => {
+      out += this.chunk({
+        tool_calls: [
+          {
+            index: idx,
+            id: tc.id,
+            type: "function",
+            function: { name: tc.name, arguments: tc.args },
+          },
+        ],
+      });
+    });
+    // pause_turn 等未知 stop_reason 有意 fallback 到 "stop"，保证 finish chunk 必带原因。
+    const finishReason = STOP_REASON_MAP[String(data["stop_reason"] ?? "")] ?? "stop";
+    this.finishReason = finishReason;
+    out += this.chunk({}, finishReason);
+    out += this.done();
+    return out;
   }
 
   private chunk(delta: Record<string, any>, finishReason: string | null = null): string {
