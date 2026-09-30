@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { appRoot } from "./app-root.js";
+
 import { readQoderCnIdeIdentity } from "./providers/qoder/credentials.js";
 import { makeDefaultQoderConfig, type QoderRegion } from "./providers/qoder/constants.js";
 
@@ -102,8 +104,8 @@ export interface All2ApiConfig {
   };
 }
 
-const CONFIG_JSONC_PATH = join(process.cwd(), "config.jsonc");
-const CONFIG_LEGACY_PATH = join(process.cwd(), "config.json");
+const CONFIG_JSONC_PATH = join(appRoot(), "config.jsonc");
+const CONFIG_LEGACY_PATH = join(appRoot(), "config.json");
 
 /** 解析顺序：优先 config.jsonc；仅 jsonc 缺失且 legacy config.json 存在时回落（warn 一次提示迁移）。 */
 function resolveConfigPath(): string {
@@ -345,7 +347,7 @@ export function loadConfig(): All2ApiConfig {
     const filePat = cfg.providers.qoder.pat?.trim() ?? "";
     let legacyPat = "";
     try {
-      const legacyPath = join(process.cwd(), "bridges", "qoder-cn.json");
+      const legacyPath = join(appRoot(), "bridges", "qoder-cn.json");
       if (existsSync(legacyPath)) {
         const legacy = JSON.parse(readFileSync(legacyPath, "utf8")) as { pat?: unknown };
         if (typeof legacy.pat === "string") legacyPat = legacy.pat.trim();

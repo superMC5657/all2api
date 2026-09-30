@@ -2,6 +2,9 @@
  * Qoder region（区域）单一来源常量（P2 去重）。
  * 不从 config/bridge 导入，以避免循环依赖。
  */
+import { join } from "node:path";
+
+import { appRoot } from "../../app-root.js";
 
 export type QoderRegion = "cn" | "intl";
 
@@ -13,12 +16,12 @@ export function regionToProviderId(region: QoderRegion): string {
   return region === "intl" ? "qoder-intl" : "qoder";
 }
 
-/** 某区域的 sidecar 数据文件。 */
-export const dataPathFor = (r: QoderRegion): string => `bridges/qoder-${r}.json`;
+/** 某区域的 sidecar 数据文件（exe 感知绝对路径）。 */
+export const dataPathFor = (r: QoderRegion): string => join(appRoot(), "bridges", `qoder-${r}.json`);
 
-/** 默认 sidecar 二进制路径（win32 使用 .exe）。 */
+/** 默认 sidecar 二进制路径（win32 使用 .exe，exe 感知绝对路径）。 */
 function defaultBridgePath(): string {
-  return process.platform === "win32" ? "bridges/qoder2api.exe" : "bridges/qoder2api";
+  return join(appRoot(), "bridges", process.platform === "win32" ? "qoder2api.exe" : "qoder2api");
 }
 
 /** cn 兜底模型列表（原文照录）。 */

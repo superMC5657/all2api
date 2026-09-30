@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { appRoot } from "../../app-root.js";
+
 import { readQoderIdeIdentityFor } from "./credentials.js";
 import { placeholderFor, REGION_ENV, type QoderRegion } from "./constants.js";
 
@@ -89,11 +91,11 @@ export async function startBridge(opts: {
   region?: QoderRegion;
   timeoutMs?: number;
 }): Promise<BridgeHandle> {
-  const binary = resolve(opts.binaryPath);
+  const binary = resolve(appRoot(), opts.binaryPath);
   await ensureSidecarBinary(binary);
 
   const apiKey = opts.apiKey || `sk-bridge-${crypto.randomUUID().replaceAll("-", "")}`;
-  const dataPath = resolve(opts.dataPath);
+  const dataPath = resolve(appRoot(), opts.dataPath);
 
   // 合并到已有的 data.json，使管理后台的修改与统计在重启后保留。
   let data: Partial<BridgeDataFile> = {};

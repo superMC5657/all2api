@@ -13,7 +13,9 @@
  * 所有变换对畸形输入保持 no-op：坏 body 永远不会被这里放大。
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type AnthropicBody = Record<string, any>;
 
@@ -21,10 +23,66 @@ export type AnthropicBody = Record<string, any>;
 // 不用 JSON import（避免改 tsconfig），运行时按相对路径读取并缓存。
 let cachedBlocks: Array<Record<string, any>> | null = null;
 
+function readSeaAssetText(key: string): string | null {
+  try {
+    const g = globalThis as unknown as {
+      require?: (id: string) => { getAsset?: (k: string, enc?: string) => unknown };
+    };
+    if (typeof g.require !== "function") return null;
+    const asset = g.require("node:sea")?.getAsset?.(key, "utf8");
+    if (typeof asset === "string" && asset) return asset;
+  } catch {
+    // 非 SEA 环境直接走文件候选
+  }
+  return null;
+}
+
+function bundleDir(): string | null {
+  try {
+    const d = typeof __dirname === "string" ? (__dirname as unknown as string) : null;
+    if (d) return d;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function zcodeSystemCandidates(): string[] {
+  const list: string[] = [];
+  const bd = bundleDir();
+  // dist 自包含产物优先：node dist/bundle.cjs 时不再依赖 src/
+  if (bd) list.push(path.join(bd, "zcode_system.json"));
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    list.push(path.join(here, "zcode_system.json"));
+  } catch {
+    // bundle/SEA 下 import.meta.url 不可用
+  }
+  try {
+    const exeDir = path.dirname(process.execPath);
+    list.push(path.join(exeDir, "zcode_system.json"));
+  } catch {
+    // ignore
+  }
+  list.push(path.join(process.cwd(), "zcode_system.json"));
+  list.push(
+    path.join(process.cwd(), "src", "providers", "zcode", "start-plan", "zcode_system.json"),
+  );
+  return list;
+}
+
 function officialBlocks(): Array<Record<string, any>> {
   if (cachedBlocks) return cachedBlocks;
   try {
-    const raw = readFileSync(new URL("./zcode_system.json", import.meta.url), "utf8");
+    const sea = readSeaAssetText("zcode_system.json");
+    const raw =
+      sea ??
+      (() => {
+        for (const p of zcodeSystemCandidates()) {
+          if (p && existsSync(p)) return readFileSync(p, "utf8");
+        }
+        throw new Error("zcode_system.json not found in candidates");
+      })();
     const parsed: unknown = JSON.parse(raw);
     cachedBlocks = Array.isArray(parsed) ? (parsed as Array<Record<string, any>>) : [];
   } catch {

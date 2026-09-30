@@ -126,10 +126,67 @@ export async function fetchCaptchaConfig(appVersion: string): Promise<CaptchaCon
 
 // ── Node 求解器 Runner（一进程一解）───────────────────────────────────────────
 
+/** CJS bundle 下 __dirname 即 dist/ 目录；ESM 开发时 undefined，走 import.meta 候选。 */
+function bundleDir(): string | null {
+  try {
+    const d = typeof __dirname === "string" ? (__dirname as unknown as string) : null;
+    if (d) return d;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function solverCandidates(): string[] {
+  const list: string[] = [];
+  const bd = bundleDir();
+  if (bd) {
+    // dist 自包含产物优先：node dist/bundle.cjs 时不再依赖 src/
+    list.push(path.join(bd, "solver.cjs"));
+    list.push(path.join(bd, "captcha-node", "solver.js"));
+  }
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    list.push(path.join(here, "captcha-node", "solver.js"));
+  } catch {
+    // bundle/SEA 下 import.meta.url 不可用，走下面候选
+  }
+  try {
+    const exeDir = path.dirname(process.execPath);
+    list.push(path.join(exeDir, "solver.cjs"));
+    list.push(path.join(exeDir, "captcha-node", "solver.js"));
+  } catch {
+    // ignore
+  }
+  list.push(path.join(process.cwd(), "captcha-node", "solver.js"));
+  list.push(
+    path.join(process.cwd(), "src", "providers", "zcode", "start-plan", "captcha-node", "solver.js"),
+  );
+  return list;
+}
+
 function solverPaths(): { js: string; dir: string } {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const js = path.join(here, "captcha-node", "solver.js");
-  return { js, dir: path.dirname(js) };
+  for (const js of solverCandidates()) {
+    if (js && existsSync(js)) return { js, dir: path.dirname(js) };
+  }
+  // 都不存在时回落到历史路径，保证 warn 信息稳定
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const js = path.join(here, "captcha-node", "solver.js");
+    return { js, dir: path.dirname(js) };
+  } catch {
+    const fallback = solverCandidates()[0] ?? "captcha-node/solver.js";
+    return { js: fallback, dir: path.dirname(fallback) };
+  }
+}
+
+/** SEA 下 process.execPath 是 all2api.exe 而非 node，必须避开。 */
+function pickNodeBin(): string {
+  const override = process.env["ZCODE_NODE_PATH"]?.trim();
+  if (override) return override;
+  const exec = process.execPath ?? "";
+  if (/node(\.exe)?$/i.test(exec)) return exec;
+  return "node";
 }
 
 function exitCodeLabel(code: number | null, signal: NodeJS.Signals | null): string {
@@ -160,7 +217,7 @@ async function runNodeSolver(scene: string, region: string, prefix: string): Pro
     console.warn(`[zcode] 验证码求解器缺失: ${solverJs}（应在 captcha-node 下）`);
     return null;
   }
-  const nodeBin = process.env["ZCODE_NODE_PATH"]?.trim() || process.execPath || "node";
+  const nodeBin = pickNodeBin();
   return new Promise<string | null>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
