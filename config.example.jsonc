@@ -8,8 +8,9 @@
   // 不带 provider/ 前缀的模型回落到此 provider；可用 "provider/model" 显式指定。
   "defaultProvider": "qoderIntl",
   "upstreamTimeoutMs": 600000,
-  // 顶层模型白名单：空/缺省=不过滤；非空=仅允许精确命中的规范 "provider/model"（无通配符），列表+转发都限制。
-  // "allowedModels": ["codebuddy/auto", "codebuddy-intl/auto"],
+  // strictModels 开关：缺省 false=透传任意模型名（保旧兼容）；true=只允许各渠道 models 表内模型
+  // （/v1/models 本就只列这些，转发遇到解析后不在目标渠道 models() 表里的模型直接 400 invalid_request_error）。
+  // "strictModels": false,
   "providers": {
     "zcode": {
       // Start Plan JWT 通道（Anthropic/OpenAI 双协议）。不要填 bigmodel/open.bigmodel.cn 的 Key。

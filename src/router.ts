@@ -26,12 +26,3 @@ export function routeModel(model: string, providers: ProviderAdapter[], defaultP
 export function canonicalModelId(providerId: string, model: string): string {
   return `${providerId}/${model}`;
 }
-
-/**
- * 顶层模型白名单命中检查（精确匹配，无通配符）：
- * 空名单 = 不过滤（全放行，保旧配置兼容）。
- */
-export function isModelAllowed(allowedModels: readonly string[], canonicalId: string): boolean {
-  if (allowedModels.length === 0) return true;
-  return allowedModels.includes(canonicalId);
-}

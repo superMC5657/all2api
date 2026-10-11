@@ -2,14 +2,14 @@ import type { Context } from "hono";
 
 import type { ProviderAdapter } from "./providers/types.js";
 import { ProviderError, extractStreamFlag } from "./providers/types.js";
-import { canonicalModelId, isModelAllowed, routeModel } from "./router.js";
+import { canonicalModelId, routeModel } from "./router.js";
 import { logUsage } from "./usage.js";
 
 interface ForwardEnv {
   providers: ProviderAdapter[];
   defaultProvider: string;
-  /** 顶层模型白名单（规范 "provider/model" 精确匹配；空 = 不过滤）。 */
-  allowedModels: readonly string[];
+  /** 严格模型校验开关（缺省 false=透传任意模型名；true=只允许各渠道 models 表内模型）。 */
+  strictModels: boolean;
 }
 
 export async function forwardCompletion(c: Context, kind: "openai" | "anthropic", env: ForwardEnv): Promise<Response> {
@@ -31,14 +31,22 @@ export async function forwardCompletion(c: Context, kind: "openai" | "anthropic"
     return c.json(errorBody(kind, "invalid_request_error", (err as Error).message), 400);
   }
 
-  // 顶层模型白名单：按解析出的规范 provider/model 精确匹配（裸 ID 已在上一步经
-  // defaultProvider 回落为规范 id）；未命中直接 400（与未知 provider 同码），OpenAI/Anthropic 双路径共用。
-  const canonicalId = canonicalModelId(target.provider.id, target.model);
-  if (!isModelAllowed(env.allowedModels, canonicalId)) {
-    return c.json(
-      errorBody(kind, "invalid_request_error", `model "${requestedModel}" (resolved "${canonicalId}") is not in allowedModels whitelist`),
-      400,
-    );
+  // strictModels=true 时按目标渠道 models() 表精确校验（精确字符串相等，无通配符）：
+  // 先按现有规则把裸 ID 经 defaultProvider 解析出规范 id 再查表；未命中直接 400，
+  // OpenAI/Anthropic 双路径共用同一拦截点。
+  if (env.strictModels) {
+    const canonicalId = canonicalModelId(target.provider.id, target.model);
+    const table = await target.provider.models();
+    if (!table.includes(target.model)) {
+      return c.json(
+        errorBody(
+          kind,
+          "invalid_request_error",
+          `model "${requestedModel}" (resolved "${canonicalId}") is not in strictModels allowlist for provider "${target.provider.id}": [${table.join(", ")}]`,
+        ),
+        400,
+      );
+    }
   }
 
   const stream = extractStreamFlag(rawBody);

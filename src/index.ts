@@ -91,8 +91,7 @@ async function main(): Promise<void> {
   app.get("/v1/models", async (c) => {
     // 每个条目都以规范的 "provider/model" 形式列出；裸 ID
     // 为向后兼容仍路由到默认 provider。
-    // 顶层 allowedModels 非空时按规范 id 精确过滤（保持原有顺序；空名单不过滤）。
-    const allow = new Set(cfg.allowedModels);
+    // strictModels 只约束转发，列表本就只列各渠道 models() 表内模型，无需过滤。
     const data = (
       await Promise.all(
         providers.map(async (p) =>
@@ -103,17 +102,15 @@ async function main(): Promise<void> {
           })),
         ),
       )
-    )
-      .flat()
-      .filter((m) => allow.size === 0 || allow.has(m.id));
+    ).flat();
     return c.json({ object: "list", data });
   });
 
   app.post("/v1/chat/completions", (c) =>
-    forwardCompletion(c, "openai", { providers, defaultProvider: cfg.defaultProvider, allowedModels: cfg.allowedModels }),
+    forwardCompletion(c, "openai", { providers, defaultProvider: cfg.defaultProvider, strictModels: cfg.strictModels }),
   );
   app.post("/v1/messages", (c) =>
-    forwardCompletion(c, "anthropic", { providers, defaultProvider: cfg.defaultProvider, allowedModels: cfg.allowedModels }),
+    forwardCompletion(c, "anthropic", { providers, defaultProvider: cfg.defaultProvider, strictModels: cfg.strictModels }),
   );
 
   serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {

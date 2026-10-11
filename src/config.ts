@@ -144,12 +144,11 @@ export interface All2ApiConfig {
   defaultProvider: string;
   upstreamTimeoutMs: number;
   /**
-   * 顶层模型白名单（规范 "provider/model" 精确匹配，无通配符）。
-   * 空/缺省 = 不过滤（列表 + 转发全放行，保旧配置兼容）；
-   * 非空 = 仅允许精确命中的模型，如 "codebuddy/auto"（列表与转发都限制；
-   * 转发是先按现有规则把裸 ID 经 defaultProvider 解析出规范 id 再查名单）。
+   * 严格模型校验开关（缺省 false=透传任意模型名，保旧配置兼容）。
+   * true=只允许各渠道 models 表内模型：/v1/models 本就只列这些，
+   * 转发遇到解析后不在目标渠道 models() 表里的模型直接 400。
    */
-  allowedModels: string[];
+  strictModels: boolean;
   providers: {
     zcode: ZCodeProviderConfig;
     qoder: QoderProviderConfig;
@@ -344,8 +343,8 @@ const DEFAULTS: All2ApiConfig = {
   apiKey: "",
   defaultProvider: "qoderIntl",
   upstreamTimeoutMs: 600_000,
-  // 空 = 不过滤（保旧配置兼容）。
-  allowedModels: [],
+  // 缺省 false=透传任意模型名（保旧配置兼容）；true=只允许各渠道 models 表内模型。
+  strictModels: false,
   providers: {
     zcode: {
       enabled: false,
@@ -388,39 +387,6 @@ const DEFAULTS: All2ApiConfig = {
   },
 };
 
-/** 顶层模型白名单归一化：非数组→[]；数组内 trim，非规范 "provider/model" 形状的条目忽略并 warn 一次（不 throw）。 */
-export function normalizeAllowedModels(raw: unknown): string[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    console.warn("[config] allowedModels is not an array — ignoring (expected string[] of exact \"provider/model\")");
-    return [];
-  }
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const ignored: string[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string") {
-      ignored.push(String(entry).slice(0, 60));
-      continue;
-    }
-    const id = entry.trim();
-    // 规范形状：恰好一个 "/" 且两边非空（与 routeModel 的 "provider/model" 对应）。
-    const parts = id.split("/");
-    if (parts.length !== 2 || !parts[0]!.trim() || !parts[1]!.trim()) {
-      ignored.push(entry.slice(0, 60));
-      continue;
-    }
-    if (!seen.has(id)) {
-      seen.add(id);
-      out.push(id);
-    }
-  }
-  if (ignored.length > 0) {
-    console.warn(`[config] allowedModels: ignored ${ignored.length} invalid entr${ignored.length === 1 ? "y" : "ies"} (expected exact "provider/model"): ${ignored.join(", ")}`);
-  }
-  return out;
-}
-
 /** 只 warn 不 throw 的凭据缺失提示（文案原样，legacy bridges/qoder-cn.json 只回落 cn）。 */
 function warnNoCredential(region: QoderRegion, port: number): void {
   if (region === "intl") {
@@ -457,8 +423,8 @@ export function loadConfig(): All2ApiConfig {
   cfg.host = process.env.ALL2API_HOST ?? cfg.host;
   cfg.port = Number(process.env.ALL2API_PORT ?? cfg.port);
   cfg.apiKey = process.env.ALL2API_API_KEY ?? cfg.apiKey;
-  // 顶层模型白名单归一化（缺省 []=不过滤；非法条目忽略并 warn，不 throw）。
-  cfg.allowedModels = normalizeAllowedModels(fileConfig.allowedModels);
+  // strictModels 开关归一化（缺省 false=透传任意模型名，保旧配置兼容）。
+  cfg.strictModels = fileConfig.strictModels === true;
   if (!cfg.apiKey?.trim() || cfg.apiKey.trim() === "sk-all2api-change-me") {
     const generated = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
     const next = persistApiKeyPreservingComments(raw, generated);
