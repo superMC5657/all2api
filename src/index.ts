@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { loadConfig } from "./config.js";
-import { forwardCompletion } from "./forward.js";
+import { forwardCompletion, forwardErrorBody } from "./forward.js";
 import { CodeBuddyProvider } from "./providers/codebuddy/index.js";
 import { startQoderProvider } from "./providers/qoder/index.js";
 import { TraeCnProvider } from "./providers/trae-cn/index.js";
@@ -77,11 +77,12 @@ async function main(): Promise<void> {
 
   app.use("*", cors());
 
-  // all2api 自身的 Bearer 鉴权（客户端用 cfg.apiKey 鉴权，而非上游密钥）
+  // all2api 自身的 Bearer 鉴权（客户端用 cfg.apiKey 鉴权，而非上游密钥）：
+  // 401 信封复用 Forward 的统一 envelope（取 openai 形状，与原手写体一致，状态码语义不变）。
   app.use("/v1/*", async (c, next) => {
     const auth = c.req.header("authorization") ?? "";
     if (auth !== `Bearer ${cfg.apiKey}`) {
-      return c.json({ error: { message: "invalid or missing API key", type: "authentication_error" } }, 401);
+      return c.json(forwardErrorBody("openai", "authentication_error", "invalid or missing API key"), 401);
     }
     await next();
   });

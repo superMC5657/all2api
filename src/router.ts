@@ -1,5 +1,8 @@
 import type { ProviderAdapter } from "./providers/types.js";
 
+// 注意：本文件是 Forward 内部的纯 helper（无 I/O、无错误信封、无日志）：
+// 只做模型 ID -> RouteTarget 的纯路由与规范 id 拼接，信封/strictModels/记账
+// 一律归 src/forward.ts；经由 forward re-export，调用方无需直引本模块。
 export interface RouteTarget {
   provider: ProviderAdapter;
   model: string;
