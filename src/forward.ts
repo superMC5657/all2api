@@ -2,12 +2,14 @@ import type { Context } from "hono";
 
 import type { ProviderAdapter } from "./providers/types.js";
 import { ProviderError, extractStreamFlag } from "./providers/types.js";
-import { routeModel } from "./router.js";
+import { canonicalModelId, isModelAllowed, routeModel } from "./router.js";
 import { logUsage } from "./usage.js";
 
 interface ForwardEnv {
   providers: ProviderAdapter[];
   defaultProvider: string;
+  /** 顶层模型白名单（规范 "provider/model" 精确匹配；空 = 不过滤）。 */
+  allowedModels: readonly string[];
 }
 
 export async function forwardCompletion(c: Context, kind: "openai" | "anthropic", env: ForwardEnv): Promise<Response> {
@@ -27,6 +29,16 @@ export async function forwardCompletion(c: Context, kind: "openai" | "anthropic"
     target = routeModel(requestedModel, env.providers, env.defaultProvider);
   } catch (err) {
     return c.json(errorBody(kind, "invalid_request_error", (err as Error).message), 400);
+  }
+
+  // 顶层模型白名单：按解析出的规范 provider/model 精确匹配（裸 ID 已在上一步经
+  // defaultProvider 回落为规范 id）；未命中直接 400（与未知 provider 同码），OpenAI/Anthropic 双路径共用。
+  const canonicalId = canonicalModelId(target.provider.id, target.model);
+  if (!isModelAllowed(env.allowedModels, canonicalId)) {
+    return c.json(
+      errorBody(kind, "invalid_request_error", `model "${requestedModel}" (resolved "${canonicalId}") is not in allowedModels whitelist`),
+      400,
+    );
   }
 
   const stream = extractStreamFlag(rawBody);

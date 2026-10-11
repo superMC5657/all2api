@@ -4,25 +4,35 @@ import { anthropicToOpenAI, openAIToAnthropicResponse, translateOpenAIStreamToAn
 import type { AnthropicRequest } from "../../translate/anthropic.js";
 import { aggregateOpenAIStream } from "../../translate/openai-aggregate.js";
 import type { CodeBuddyProviderConfig } from "../../config.js";
-import { CodeBuddyCredentials } from "./credentials.js";
+import { CodeBuddyCredentials, chatUrlFor, normalizeRegion, type CodeBuddyRegion } from "./credentials.js";
 
 /**
- * CodeBuddy / WorkBuddy（腾讯）provider——直连 copilot.tencent.com。
+ * CodeBuddy / WorkBuddy（含海外 WorkBuddy AI / CodeBuddy AI）provider——base 按 auth.domain 经 pickBase 派生
+ *（CN copilot.tencent.com；海外 workbuddy.ai / codebuddy.ai），路径同为 /v2/chat/completions。
  * 网关使用 OpenAI chat 协议并支持原生 tools，但只提供流式（streaming）响应，因此：
  *   - 客户端要流式   -> SSE 透传（OpenAI）或转译后的 SSE（Anthropic）
  *   - 客户端要非流式 -> 在本地聚合上游 SSE
  * Token 过期由 credentials 模块处理（自动刷新 + 写回）；
  * 遇到 401 会触发一次强制刷新 + 重试。
+ *
+ * 双开：providers.codebuddy（CN，id "codebuddy"）+ providers.codebuddyIntl（海外，id "codebuddy-intl"）
+ * 可同时启用（对齐 qoder/qoderIntl、trae/trae-cn 模式）。第二实例经构造参 id 覆盖
+ * （缺省按 region 派生：intl → "codebuddy-intl"，其余 → "codebuddy"）；models 照常。
+ * 双开必须给两边配不同的 authDir（否则默认探测会撞到同一份 session）。
  */
 export class CodeBuddyProvider implements ProviderAdapter {
-  readonly id = "codebuddy";
+  readonly id: string;
   private readonly credentials: CodeBuddyCredentials;
   private readonly modelsList: string[];
+  private readonly region: CodeBuddyRegion;
 
   constructor(
     config: CodeBuddyProviderConfig,
     private readonly timeoutMs: number,
+    idOverride?: string,
   ) {
+    this.region = normalizeRegion(config.region);
+    this.id = idOverride?.trim() || (this.region === "intl" ? "codebuddy-intl" : "codebuddy");
     this.credentials = new CodeBuddyCredentials(
       config.authDir?.trim() || undefined,
       config.electronPath?.trim() || config.electronBinary?.trim() || undefined,
@@ -33,7 +43,9 @@ export class CodeBuddyProvider implements ProviderAdapter {
         key: config.vscdbKey?.trim() || undefined,
         app: config.vscdbApp?.trim() || undefined,
         vscdbDir: config.vscdbDir?.trim() || undefined,
+        region: this.region,
       },
+      this.region,
     );
     this.modelsList = config.models.length > 0 ? config.models : DEFAULT_MODELS;
   }
@@ -90,7 +102,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
     const makeSignal = () => (opts.stream ? undefined : AbortSignal.timeout(this.timeoutMs));
     const headers = await this.credentials.headers();
     const signal = makeSignal();
-    let res = await fetch(this.chatUrl, {
+    let res = await fetch(chatUrlFor(headers["x-domain"], this.region), {
       method: "POST",
       headers,
       body,
@@ -100,18 +112,17 @@ export class CodeBuddyProvider implements ProviderAdapter {
       // 重试前消费掉旧响应体，避免 socket 泄漏。
       await res.body?.cancel();
       await this.credentials.refresh();
+      const retryHeaders = await this.credentials.headers();
       const retrySignal = makeSignal();
-      res = await fetch(this.chatUrl, {
+      res = await fetch(chatUrlFor(retryHeaders["x-domain"], this.region), {
         method: "POST",
-        headers: await this.credentials.headers(),
+        headers: retryHeaders,
         body,
         ...(retrySignal ? { signal: retrySignal } : {}),
       });
     }
     return res;
   }
-
-  private readonly chatUrl = "https://copilot.tencent.com/v2/chat/completions";
 }
 
 /**

@@ -10,6 +10,7 @@
     "decrypt:zcode": "tsx scripts/zcode-decrypt.ts",
     "decrypt:codebuddy": "tsx scripts/codebuddy-decrypt.ts",
     "decrypt:qoder-cn": "tsx scripts/qoder-cn-decrypt.ts",
+    "decrypt:trae": "tsx scripts/trae-decrypt.ts",
     "decrypt:qoder-intl": "tsx -e \"import('file://' + process.cwd() + '/src/providers/qoder/credentials.ts').then((m) => { const ide = m.readQoderIdeIdentity(); console.log(ide ? ('intl identity: uid=' + ide.uid + ' nick=' + ide.nickname) : 'no usable intl identity (login intl IDE and retry)'); process.exit(ide ? 0 : 1); });\"",
     "build:sidecar": "node scripts/build-sidecar.mjs",
     "build:bundle": "node scripts/build-bundle.mjs",

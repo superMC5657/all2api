@@ -21,3 +21,17 @@ export function routeModel(model: string, providers: ProviderAdapter[], defaultP
   if (!fallback) throw new Error("no provider is enabled in config.json");
   return { provider: fallback, model };
 }
+
+/** 路由结果的规范 id（"provider/model"，与 /v1/models 的 id 形状一致）。 */
+export function canonicalModelId(providerId: string, model: string): string {
+  return `${providerId}/${model}`;
+}
+
+/**
+ * 顶层模型白名单命中检查（精确匹配，无通配符）：
+ * 空名单 = 不过滤（全放行，保旧配置兼容）。
+ */
+export function isModelAllowed(allowedModels: readonly string[], canonicalId: string): boolean {
+  if (allowedModels.length === 0) return true;
+  return allowedModels.includes(canonicalId);
+}

@@ -8,6 +8,8 @@
   // 不带 provider/ 前缀的模型回落到此 provider；可用 "provider/model" 显式指定。
   "defaultProvider": "qoderIntl",
   "upstreamTimeoutMs": 600000,
+  // 顶层模型白名单：空/缺省=不过滤；非空=仅允许精确命中的规范 "provider/model"（无通配符），列表+转发都限制。
+  // "allowedModels": ["codebuddy/auto", "codebuddy-intl/auto"],
   "providers": {
     "zcode": {
       // Start Plan JWT 通道（Anthropic/OpenAI 双协议）。不要填 bigmodel/open.bigmodel.cn 的 Key。
@@ -46,9 +48,12 @@
     },
     "codebuddy": {
       "enabled": true,
+      // region: cn=强制 CN（默认）；auto=按 auth.domain 动态路由（仅老配置兼容用）；intl 一般只给 codebuddyIntl 用。
+      "region": "cn",
       // 留空全自动探测；特殊安装才需显式键，见 README codebuddy 一节。
       "userAgent": "all2api/0.1",
       // auth 目录显式覆盖（其下 *.info 文件；也可直接指向单个 *.info 文件）。缺省自动探测双 App 目录。
+      // 双开（codebuddy + codebuddyIntl）必须给两边配不同的 authDir，否则默认探测会撞到同一份 session。
       // "authDir": "",
       // Electron 二进制显式覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先于此）。缺省自动探测。
       // "electronPath": "",
@@ -66,6 +71,63 @@
       // "vscdbDir": "CodeBuddy CN",
       // 仅展示（/v1/models），拉不到时用此表。
       "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
+    },
+    "codebuddyIntl": {
+      // 海外版（https://www.workbuddy.ai / https://www.codebuddy.ai），默认关闭（老用户升级不 breaking）。
+      // 与 codebuddy 可同时启用（/v1/models 分别列出 codebuddy/... 与 codebuddy-intl/...）。
+      "enabled": false,
+      "region": "intl",
+      "userAgent": "all2api/0.1",
+      // 双开必须给两边配不同的 authDir（其下 *.info 文件；也可直接指向单个 *.info 文件），否则默认探测会撞到同一份 session。
+      // "authDir": "",
+      // Electron 二进制显式覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先于此；intl 优先探测 WorkBuddy AI）。缺省自动探测。
+      // "electronPath": "",
+      // electronPath 的别名；两者都填时 electronPath 优先。
+      // "electronBinary": "",
+      // at-rest 密钥 linked-binding 名显式覆盖。缺省按序尝试各 App 绑定名，任一命中即用。
+      // "keyBinding": "",
+      // vscdb 凭据源（仅 .info 不可用时 fallback）。未显式指定 vscdbKey 时 intl 优先试 accessToken（海外）。覆盖顺序：CODEBUDDY_VSCDB 环境变量 > vscdbPath。
+      // "vscdbPath": "",
+      // vscdb ItemTable 键名（intl 未显式指定时优先 planning-genie.new.accessToken）。
+      // "vscdbKey": "planning-genie.new.accessToken",
+      // 钥匙环 application 名（默认 CodeBuddy CN；海外登录按实际应用名覆盖）。
+      // "vscdbApp": "CodeBuddy CN",
+      // vscdb 应用目录名覆盖（默认 CodeBuddy CN，仅改变平台惯例路径中的目录段）。
+      // "vscdbDir": "CodeBuddy CN",
+      // 仅展示（/v1/models），拉不到时用此表。
+      "models": ["glm-5.3-flash", "glm-5.3-flashx", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3-pay", "hy4-preview", "hy3", "hy3-preview", "hy3-preview-agent", "auto"]
+    },
+    "trae": {
+      // Intl 海外版（https://api.trae.ai）。首版聊天为 501 骨架（AES-256-GCM agent v3 预留），models 兜底 ["auto"]。
+      "enabled": false,
+      // 显式 token（最高优；留空走 TRAE_API_TOKEN > ~/.trae_token > storage.json）。
+      // "apiToken": "",
+      // 版本显式覆盖（Trae / TRAE SOLO；环境 TRAE_EDITION 同效，config 优先）。
+      // "edition": "",
+      // User 目录显式覆盖（环境 TRAE_DATA_DIR 同效，config 优先；authDir 为别名，dataDir 优先）。
+      // "dataDir": "",
+      // IDE 版本 / UA 显式覆盖（缺省自动探测，特殊安装才填）。
+      // "ideVersion": "",
+      // "userAgent": "",
+      // tc 盐仅走 TRAE_TC_SALT 环境变量；诊断先跑 `npm run decrypt:trae`。
+      // 仅展示（/v1/models）+ 兜底，动态表待 ProjectEio 实机后接。
+      "models": ["auto"]
+    },
+    "trae-cn": {
+      // CN 国内版（AgentHost https://trae-api-cn.mchost.guru）。默认关闭，需登录 Trae CN 桌面端或填 apiToken。
+      "enabled": false,
+      // 显式 token（最高优；留空走 TRAE_CN_API_TOKEN > ~/.trae_cn_token > storage.json）。
+      // Windows 首次建议先跑 `npm run decrypt:trae` 验证登录是否可读。
+      // "apiToken": "",
+      // 版本显式覆盖（TRAE SOLO CN / Trae CN；环境 TRAE_EDITION 同效，config 优先）。
+      // "edition": "",
+      // User 目录显式覆盖（环境 TRAE_CN_DATA_DIR 同效，config 优先；authDir 为别名，dataDir 优先）。
+      // "dataDir": "",
+      // IDE 版本 / UA 显式覆盖（缺省自动探测，特殊安装才填）。
+      // "ideVersion": "",
+      // "userAgent": "",
+      // 仅展示（/v1/models）+ 白名单，动态表待实机后接。
+      "models": ["auto"]
     }
   }
 }

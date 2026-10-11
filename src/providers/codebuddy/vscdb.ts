@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { resolvePythonBin } from "../../python.js";
-import type { CodeBuddyAuth } from "./credentials.js";
+import type { CodeBuddyAuth, CodeBuddyRegion } from "./credentials.js";
 
 /**
  * CodeBuddy CN（VSCode 系）桌面端 vscdb 凭据源（只读）。
@@ -24,6 +24,9 @@ import type { CodeBuddyAuth } from "./credentials.js";
  */
 
 export const DEFAULT_VSCDB_KEY = "planning-genie.new.accessTokencn";
+/** 海外版候选 key（默认仍 accessTokencn 优先，保 CN 回归；显式配置 key 时只用被钉项）。 */
+export const VSCDB_KEY_INTL = "planning-genie.new.accessToken";
+export const VSCDB_KEY_CANDIDATES = [DEFAULT_VSCDB_KEY, VSCDB_KEY_INTL];
 export const DEFAULT_VSCDB_APP = "CodeBuddy CN";
 /** vscdb 应用目录名默认 'CodeBuddy CN'（Linux 实测名；Win/mac 路径未实机确认，可配 vscdbDir 覆盖；不发明其他应用名）。 */
 export const DEFAULT_VSCDB_DIR = "CodeBuddy CN";
@@ -44,6 +47,17 @@ export interface VscdbSourceOptions {
   keyringSecret?: Buffer;
   /** 子进程超时毫秒：secret 链为总额度（默认 25s，单链路 8s）；sqlite 读取默认 15s。 */
   timeoutMs?: number;
+  /**
+   * region（区域）：缺省 auto。仅影响未显式指定 key 时的候选顺序——
+   * cn/auto 为 accessTokencn → accessToken（现有顺序不变，保 CN 回归），
+   * intl 为 accessToken → accessTokencn（海外优先）。
+   */
+  region?: CodeBuddyRegion;
+}
+
+/** 未显式指定 key 时的候选顺序（cn/auto：CN 优先；intl：海外 accessToken 优先）。 */
+export function vscdbKeyCandidates(region?: CodeBuddyRegion): string[] {
+  return region === "intl" ? [VSCDB_KEY_INTL, DEFAULT_VSCDB_KEY] : [...VSCDB_KEY_CANDIDATES];
 }
 
 /** 平台惯例 vscdb 路径（Linux 实测；Win/mac 未实机确认）。 */
@@ -488,7 +502,7 @@ export function mapVscdbAuth(doc: Record<string, unknown>): CodeBuddyAuth {
   return { accessToken: accessToken as string, refreshToken: refreshToken as string, expiresAt, domain: domain as string, enterpriseId, uid };
 }
 
-/** 一站式：定位 → 取口令 → 读库 → 解密 → 映射。 */
+/** 一站式：定位 → 取口令 → 读库 → 解密 → 映射。未显式指定 key 时按 region 顺序试（cn/auto：CN 优先回归；intl：海外优先）。 */
 export async function readVscdbAuth(opts: VscdbSourceOptions = {}): Promise<CodeBuddyAuth> {
   const dbPath = resolveVscdbPath(opts.dbPath, opts.vscdbDir);
   if (!existsSync(dbPath)) {
@@ -496,10 +510,23 @@ export async function readVscdbAuth(opts: VscdbSourceOptions = {}): Promise<Code
       `vscdb not found: ${dbPath} — log in to the CodeBuddy desktop app first (or set CODEBUDDY_VSCDB / vscdbPath)`,
     );
   }
-  const key = opts.key?.trim() || DEFAULT_VSCDB_KEY;
   const app = opts.app?.trim() || DEFAULT_VSCDB_APP;
   const secret = opts.keyringSecret ?? (await readKeyringSecret(app, opts.timeoutMs ?? KEYRING_TOTAL_TIMEOUT_MS));
   if (secret.length === 0) throw new Error(`keyring secret for ${app} is empty`);
-  const raw = await readVscdbValue(dbPath, key, opts.timeoutMs);
-  return mapVscdbAuth(decryptVscdbBlob(parseVscdbValue(raw, dbPath, key), secret));
+  const explicit = opts.key?.trim();
+  if (explicit) {
+    const raw = await readVscdbValue(dbPath, explicit, opts.timeoutMs);
+    return mapVscdbAuth(decryptVscdbBlob(parseVscdbValue(raw, dbPath, explicit), secret));
+  }
+  const candidates = vscdbKeyCandidates(opts.region);
+  const failures: string[] = [];
+  for (const key of candidates) {
+    try {
+      const raw = await readVscdbValue(dbPath, key, opts.timeoutMs);
+      return mapVscdbAuth(decryptVscdbBlob(parseVscdbValue(raw, dbPath, key), secret));
+    } catch (e) {
+      failures.push(`${key}: ${(e as Error).message}`);
+    }
+  }
+  throw new Error(`vscdb keys not found in ${dbPath} (tried ${candidates.join(", ")} — ${failures.join("; ")})`);
 }

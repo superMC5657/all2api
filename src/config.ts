@@ -52,19 +52,31 @@ export interface CodeBuddyProviderConfig {
   userAgent: string;
   models: string[];
   /**
+   * region（区域）：codebuddy 缺省 "cn"，codebuddyIntl 缺省 "intl"；
+   * "auto" 仅为保旧配置兼容（按 auth.domain 经 pickBase 动态路由）。
+   * - "cn"：强制 CN 后端（copilot.tencent.com）；遇到海外 domain（workbuddy.ai/codebuddy.ai）抛错提示去开 codebuddyIntl；
+   * - "intl"：强制 Global 后端（空 domain 默认 www.workbuddy.ai；workbuddy.ai/codebuddy.ai 均接受）；
+   *   遇到 CN domain 抛错提示去开 codebuddy。
+   * 双开（providers.codebuddy + providers.codebuddyIntl）必须给两边配不同的 authDir
+   * （/ WORKBUDDY_AUTH_FILE / vscdbPath），否则默认探测会撞到同一份 session
+   * （磁盘同一 CLI 只保留 ONE session，以 auth.domain 区分）。
+   */
+  region?: "auto" | "cn" | "intl";
+  /**
    * auth 目录显式覆盖（其下 *.info 文件；也可直接指向单个 *.info 文件）。
-   * 缺省自动探测（双 App 都要探测，CodeBuddy 在前）：Windows 为 %LOCALAPPDATA%
-   * 下的 CodeBuddyExtension / WorkBuddyExtension；Linux 为 $XDG_DATA_HOME →
-   * ~/.local/share → $XDG_CONFIG_HOME → ~/.config 下的同名双目录。
+   * 缺省自动探测（双 App 都要探测，cn/auto 为 CodeBuddy 在前，intl 为 WorkBuddy 在前）：
+   * Windows 为 %LOCALAPPDATA% 下的 CodeBuddyExtension / WorkBuddyExtension；
+   * Linux 为 $XDG_DATA_HOME → ~/.local/share → $XDG_CONFIG_HOME → ~/.config 下的同名双目录。
+   * 双开时两边必须指向两份不同登录（见 region 注释）。
    */
   authDir?: string;
   /**
    * Electron 二进制显式覆盖（WORKBUDDY_ELECTRON_BIN 环境变量优先于此）。
-   * 缺省自动探测（双 App 都要探测，WorkBuddy 在前）：Windows 为 Program Files /
-   * LOCALAPPDATA 下的 Tencent WorkBuddy / CodeBuddy + 注册表卸载项双查；
+   * 缺省自动探测（双 App 都要探测，cn/auto 为 WorkBuddy 在前，intl 为 WorkBuddy AI 在前）：
+   * Windows 为 Program Files / LOCALAPPDATA 下的 Tencent WorkBuddy / CodeBuddy + 注册表卸载项双查；
    * Linux 为实测 buddycn 真实路径（/usr/share/buddycn/bin/buddycn）→ PATH 中的
    * codebuddy/workbuddy/buddycn → /opt 下 *buddy* 目录 → /usr/share 下 *buddy* 目录
-   * → .desktop 桌面项 Exec → 常规安装位。
+   * → .desktop 桌面项 Exec → 常规安装位（intl 下 workbuddy 优先、buddycn 沉底）。
    */
   electronPath?: string;
   /** electronPath 的别名；两者都填时 electronPath 优先。 */
@@ -79,6 +91,8 @@ export interface CodeBuddyProviderConfig {
    * CodeBuddy CN vscdb 凭据源（仅当 .info 不可用时 fallback，Win 行为不变）。
    * 缺省 state.vscdb 路径为 ~/.config/CodeBuddy CN/User/globalStorage/state.vscdb，
    * 覆盖顺序：CODEBUDDY_VSCDB 环境变量 > vscdbPath。
+   * 未显式指定 vscdbKey 时候选顺序随 region：cn/auto 为 accessTokencn 优先，
+   * intl 为 accessToken（海外）优先。
    */
   vscdbPath?: string;
   /** vscdb ItemTable 键名（默认 planning-genie.new.accessTokencn）。 */
@@ -89,6 +103,39 @@ export interface CodeBuddyProviderConfig {
   vscdbDir?: string;
 }
 
+export interface TraeProviderConfig {
+  enabled: boolean;
+  /**
+   * 显式 token（最高优；留空走环境/文件/storage.json）。
+   * - trae-cn：config.apiToken > TRAE_CN_API_TOKEN > ~/.trae_cn_token > storage.json；
+   * - trae（intl）：config.apiToken > TRAE_API_TOKEN > ~/.trae_token > storage.json。
+   */
+  apiToken?: string;
+  /**
+   * 版本显式覆盖（config 优先于 TRAE_EDITION 环境变量）。
+   * - trae-cn：TRAE SOLO CN / Trae CN；
+   * - trae（intl）：Trae / TRAE SOLO。
+   */
+  edition?: string;
+  /**
+   * User 目录显式覆盖（视为 User 目录直接用；config 优先于环境变量）。
+   * - trae-cn：TRAE_CN_DATA_DIR；trae（intl）：TRAE_DATA_DIR。
+   * 兼容别名见 authDir，两者都填时 dataDir 优先。
+   */
+  dataDir?: string;
+  /** dataDir 的别名；两者都填时 dataDir 优先。 */
+  authDir?: string;
+  /** IDE 版本显式覆盖（默认读 local_env.json / TRAE_IDE_VERSION）。 */
+  ideVersion?: string;
+  /** 整 UA 覆盖（默认 `Trae/<ver>`）。 */
+  userAgent?: string;
+  /**
+   * 非空即为模型白名单（为空用内置兜底 ["auto"]）。
+   * tc 信封盐仅走 TRAE_TC_SALT 环境变量（诊断先跑 `npm run decrypt:trae` 核对）。
+   */
+  models: string[];
+}
+
 export interface All2ApiConfig {
   host: string;
   port: number;
@@ -96,11 +143,21 @@ export interface All2ApiConfig {
   apiKey: string;
   defaultProvider: string;
   upstreamTimeoutMs: number;
+  /**
+   * 顶层模型白名单（规范 "provider/model" 精确匹配，无通配符）。
+   * 空/缺省 = 不过滤（列表 + 转发全放行，保旧配置兼容）；
+   * 非空 = 仅允许精确命中的模型，如 "codebuddy/auto"（列表与转发都限制；
+   * 转发是先按现有规则把裸 ID 经 defaultProvider 解析出规范 id 再查名单）。
+   */
+  allowedModels: string[];
   providers: {
     zcode: ZCodeProviderConfig;
     qoder: QoderProviderConfig;
     qoderIntl: QoderProviderConfig;
     codebuddy: CodeBuddyProviderConfig;
+    codebuddyIntl: CodeBuddyProviderConfig;
+    trae: TraeProviderConfig;
+    "trae-cn": TraeProviderConfig;
   };
 }
 
@@ -254,12 +311,41 @@ function persistApiKeyPreservingComments(raw: string, generated: string): string
   return raw.slice(0, brace + 1) + line + rest;
 }
 
+/** CodeBuddy 默认模型表（CN/Intl 共用展示 + 兜底；/v1/models 前缀由 provider id 区分）。 */
+const CODEBUDDY_MODELS: string[] = [
+  "glm-5.3-flash",
+  "glm-5.3-flashx",
+  "glm-5.3",
+  "glm-5.2",
+  "glm-5.1",
+  "glm-5v-turbo",
+  "kimi-k2.7",
+  "kimi-k2.6",
+  "kimi-k2.5",
+  "deepseek-v4.1-flash",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "minimax-m3-pay",
+  "hy4-preview",
+  "hy3",
+  "hy3-preview",
+  "hy3-preview-agent",
+  "auto",
+];
+
+/** 各 region 默认 CodeBuddy provider 配置的工厂函数（每次调用返回全新的 models 数组）。 */
+function makeDefaultCodeBuddyConfig(region: "auto" | "cn" | "intl", enabled: boolean): CodeBuddyProviderConfig {
+  return { enabled, userAgent: "all2api/0.1", region, models: [...CODEBUDDY_MODELS] };
+}
+
 const DEFAULTS: All2ApiConfig = {
   host: "127.0.0.1",
   port: 8787,
   apiKey: "",
   defaultProvider: "qoderIntl",
   upstreamTimeoutMs: 600_000,
+  // 空 = 不过滤（保旧配置兼容）。
+  allowedModels: [],
   providers: {
     zcode: {
       enabled: false,
@@ -273,34 +359,67 @@ const DEFAULTS: All2ApiConfig = {
     },
     qoder: makeDefaultQoderConfig("cn"),
     qoderIntl: makeDefaultQoderConfig("intl"),
+    trae: {
+      enabled: false,
+      apiToken: "",
+      edition: "",
+      dataDir: "",
+      // 2026-10-10 Intl 首版为聊天 501 骨架（AES-256-GCM agent v3 预留），模型表静态兜底 ["auto"]。
+      models: ["auto"],
+    },
+    "trae-cn": {
+      enabled: false,
+      apiToken: "",
+      edition: "",
+      dataDir: "",
+      // 2026-10-10 CN 直连 AgentHost 轻聊天（solo_work_lite），动态模型表待实机后接，先静态兜底 ["auto"]。
+      models: ["auto"],
+    },
     codebuddy: {
-      enabled: true,
-      userAgent: "all2api/0.1",
+      ...makeDefaultCodeBuddyConfig("cn", true),
       // 2026-09-26 实测网关逐个验证过；腾讯网关无模型目录接口，
       // 桌面端列表是它自己动态拉的，新模型出现时按 ID 规律探测补充
-      models: [
-        "glm-5.3-flash",
-        "glm-5.3-flashx",
-        "glm-5.3",
-        "glm-5.2",
-        "glm-5.1",
-        "glm-5v-turbo",
-        "kimi-k2.7",
-        "kimi-k2.6",
-        "kimi-k2.5",
-        "deepseek-v4.1-flash",
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "minimax-m3-pay",
-        "hy4-preview",
-        "hy3",
-        "hy3-preview",
-        "hy3-preview-agent",
-        "auto",
-      ],
+    },
+    // 海外版默认关闭（避免老用户升级被 breaking；双开时与 codebuddy 共存，
+    // 两边必须配不同的 authDir，否则默认探测会撞到同一份 session）。
+    codebuddyIntl: {
+      ...makeDefaultCodeBuddyConfig("intl", false),
     },
   },
 };
+
+/** 顶层模型白名单归一化：非数组→[]；数组内 trim，非规范 "provider/model" 形状的条目忽略并 warn 一次（不 throw）。 */
+export function normalizeAllowedModels(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.warn("[config] allowedModels is not an array — ignoring (expected string[] of exact \"provider/model\")");
+    return [];
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const ignored: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") {
+      ignored.push(String(entry).slice(0, 60));
+      continue;
+    }
+    const id = entry.trim();
+    // 规范形状：恰好一个 "/" 且两边非空（与 routeModel 的 "provider/model" 对应）。
+    const parts = id.split("/");
+    if (parts.length !== 2 || !parts[0]!.trim() || !parts[1]!.trim()) {
+      ignored.push(entry.slice(0, 60));
+      continue;
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  if (ignored.length > 0) {
+    console.warn(`[config] allowedModels: ignored ${ignored.length} invalid entr${ignored.length === 1 ? "y" : "ies"} (expected exact "provider/model"): ${ignored.join(", ")}`);
+  }
+  return out;
+}
 
 /** 只 warn 不 throw 的凭据缺失提示（文案原样，legacy bridges/qoder-cn.json 只回落 cn）。 */
 function warnNoCredential(region: QoderRegion, port: number): void {
@@ -330,11 +449,16 @@ export function loadConfig(): All2ApiConfig {
       qoder: { ...DEFAULTS.providers.qoder, ...fileConfig.providers?.qoder },
       qoderIntl: { ...DEFAULTS.providers.qoderIntl, ...fileConfig.providers?.qoderIntl },
       codebuddy: { ...DEFAULTS.providers.codebuddy, ...fileConfig.providers?.codebuddy },
+      codebuddyIntl: { ...DEFAULTS.providers.codebuddyIntl, ...fileConfig.providers?.codebuddyIntl },
+      trae: { ...DEFAULTS.providers.trae, ...fileConfig.providers?.trae },
+      "trae-cn": { ...DEFAULTS.providers["trae-cn"], ...fileConfig.providers?.["trae-cn"] },
     },
   };
   cfg.host = process.env.ALL2API_HOST ?? cfg.host;
   cfg.port = Number(process.env.ALL2API_PORT ?? cfg.port);
   cfg.apiKey = process.env.ALL2API_API_KEY ?? cfg.apiKey;
+  // 顶层模型白名单归一化（缺省 []=不过滤；非法条目忽略并 warn，不 throw）。
+  cfg.allowedModels = normalizeAllowedModels(fileConfig.allowedModels);
   if (!cfg.apiKey?.trim() || cfg.apiKey.trim() === "sk-all2api-change-me") {
     const generated = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
     const next = persistApiKeyPreservingComments(raw, generated);
