@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   TRAE_APP_ID,
   TRAE_STORAGE_KEY,
+  TRAE_TC_MAGIC,
   findTraeStorageEntry,
   parseTraeAuthBuffer,
   readTokenFile,
@@ -14,7 +15,7 @@ import {
   traeStorageValueToBuffer,
   type TraeDataCandidate,
   type TraeDeviceIds,
-} from "../trae-cn/credentials.js";
+} from "./kernel.js";
 
 /**
  * Trae Intl（海外版）凭据处理。
@@ -24,7 +25,7 @@ import {
  * 落盘同为 storage.json + 键 `iCubeAuthInfo://icube.cloudide`，
  * Intl（SG）系为明文 JSON（tc 信封出现时同样尝试解密，容忍混写）。
  *
- * tc 信封 KDF / 设备标识 / 头部构造复用 trae-cn 实现（单一真相源），
+ * tc 信封 KDF / 设备标识 / 头部构造复用共享 kernel（./kernel.js，两 region → kernel），
  * 本文件只拥有 Intl 侧的版本表、token 优先级与探测/诊断。
  *
  * 注意：首版 Intl 聊天（AES-256-GCM agent v3，ProjectEio 路径）留空，
@@ -80,7 +81,7 @@ export function listTraeIntlCandidates(opts?: TraeIntlCandidateOptions): TraeDat
   return TRAE_INTL_EDITIONS.map(toIntlCandidate);
 }
 
-// 单行 token 文件读取复用 trae-cn.readTokenFile（原两处同形，此处不再自带一份）。
+// 单行 token 文件读取复用 kernel.readTokenFile（原两 region 同形，收拢至 kernel）。
 
 export interface TraeIdentity {
   token: string;
@@ -182,16 +183,18 @@ export class TraeCredentials {
     );
   }
 
-  /** 后端请求头（与 CN 同形，复用 trae-cn.traeHeadersForIdentity；Intl 聊天留空前供诊断与 ProjectEio 预留）。 */
+  /** 后端请求头（与 CN 同形，经 kernel.traeHeadersForIdentity；Intl 聊天留空前供诊断与 ProjectEio 预留）。 */
   async headers(): Promise<Record<string, string>> {
     const identity = await this.get();
     const storageDoc = readTraeStorageDoc(identity.dataDir);
-    return traeHeadersForIdentity(identity, storageDoc, this.opts);
+    // 设备回退扫描 Intl 自家候选表（dataDir 具备时 kernel 只用 userDir；裸 token 时才用回退）。
+    const fallbackUserDirs = identity.dataDir ? undefined : listTraeIntlCandidates(this.opts).map((c) => c.userDir);
+    return traeHeadersForIdentity(identity, storageDoc, { ...this.opts, fallbackUserDirs });
   }
 }
 
 // ---------------------------------------------------------------------------
-// 探测/诊断导出（脱敏，只含路径与元数据；解密引擎复用 trae-cn）
+// 探测/诊断导出（脱敏，只含路径与元数据；解密引擎在 kernel）
 // ---------------------------------------------------------------------------
 
 export interface TraeIntlCandidateProbe {
@@ -231,7 +234,7 @@ export function probeTraeIntlCandidates(opts?: TraeIntlCandidateOptions): TraeIn
         probe.error = "unrecognized credential value shape";
         return probe;
       }
-      probe.scheme = buf.length >= 6 && buf.subarray(0, 6).equals(Buffer.from([0x74, 0x63, 0x05, 0x10, 0x00, 0x00])) ? "tc" : "plain";
+      probe.scheme = buf.length >= TRAE_TC_MAGIC.length && buf.subarray(0, TRAE_TC_MAGIC.length).equals(TRAE_TC_MAGIC) ? "tc" : "plain";
       const auth = parseTraeAuthBuffer(buf);
       probe.decrypted = true;
       probe.fields = auth.fields;
