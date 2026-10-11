@@ -12,7 +12,34 @@
  *    StreamConverter 双向翻译最小集）。
  */
 
+/**
+ * Start Plan 内核（agent）：上游请求构建 + OpenAI 双向翻译最小集 + 错误分类
+ * + 一次 dispatchAnthropic Forward 所需的全部扇出收口。
+ *
+ * client.ts 只依赖本模块（+ credentials）：JWT、身份/trace 头、body 变换、
+ * 验证码重试、429/5xx 重试均收进本模块的 dispatchStartPlan / 上下文解析之后，
+ * 不再直引 identity / version / constants / body-transform / captcha /
+ * fingerprint。identity.ts / version.ts 仅留 re-export 兼容层，真实实现归本模块。
+ *
+ * Python 对照：
+ *  - app/agent.py（build_request：JWT vs fallback 分叉、_DROP_HEADERS 清洗、
+ *    Anthropic 一律走 zcode-plan、stream 透传）。本期只保留 JWT 通道
+ *    （fallback 按量通道已移除，无 JWT 直接抛错，由 client.ts 保证先行校验）。
+ *  - app/routes/gateway.py（_normalize_body：别名小写映射 + max_tokens 钳制
+ *    [1,131072] + messages str 桥接；_detect_captcha_challenge / _is_exhausted /
+ *    _is_risk_control / _parse_retry_after 错误分类）。
+ *  - app/openai_compat.py（openai_to_anthropic / anthropic_to_openai /
+ *    StreamConverter 双向翻译最小集）。
+ *  - app/identity.py（12 身份头 + 3 trace 头，已折叠进本模块，identity.ts 只留 re-export）。
+ *  - app/constants.py（CLIENT_APP_VERSION 等纯数据仍由 constants.ts 拥有，本模块只消费不复制）。
+ *  - version 探测（注册表 > exe > runtime，已折叠进本模块，version.ts 只留 re-export）。
+ */
+
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 
 import { jwtUserId, transformBody, type AnthropicBody } from "./body-transform.js";
 export type { AnthropicBody } from "./body-transform.js";
@@ -21,17 +48,281 @@ import {
   CAPTCHA_BODY_MARKERS,
   CAPTCHA_HEADER,
   CAPTCHA_REGION_HEADER,
+  CLIENT_APP_VERSION_DEFAULT,
   EXHAUST_HTTP_STATUSES,
   EXHAUST_KEYWORDS,
+  HTTP_REFERER,
+  IDENTITY_CLIENT_LANGUAGE,
+  IDENTITY_CLIENT_TIMEZONE,
+  IDENTITY_OS_VERSION,
+  IDENTITY_RELEASE_CHANNEL,
+  IDENTITY_TITLE,
+  MAX_429_RETRIES,
+  MAX_5XX_RETRIES,
+  MAX_CAPTCHA_RETRIES,
   MAX_TOKENS_LIMIT,
   MESSAGES_URL,
   MODEL_NAME_MAP,
+  RETRY_429_DEFAULT_WAIT_S,
   RETRY_429_WAIT_MAX_S,
+  RETRY_5XX_WAIT_MS,
   RISK_CONTROL_HTTP_STATUSES,
   RISK_CONTROL_MARKERS,
+  X_ZCODE_AGENT,
+  userAgent,
 } from "./constants.js";
-import { buildIdentityHeaders, buildTraceHeaders } from "./identity.js";
 import type { DeviceProfile } from "./fingerprint.js";
+import { profileForJwt, resolveDeviceFile as resolveDeviceFileImpl } from "./fingerprint.js";
+import { getVerifyParam } from "./captcha.js";
+import { ProviderError, toUpstreamResult } from "../../types.js";
+import { upstreamError } from "../../base.js";
+
+// ── 身份头仿真（折叠自 identity.ts；语义原样，调用方经由本模块） ─────────────
+// 官方 ZCode 桌面端 companion 头集合。身份头顺序（固定）：
+//   HTTP-Referer, User-Agent, X-ZCode-App-Version, X-Title, X-ZCode-Agent,
+//   X-Platform, X-Release-Channel, X-Client-Language, X-Client-Timezone,
+//   X-Os-Category, X-Os-Version, X-Device-Mid
+// 追踪头（每请求全新 UUID，仅以下三个）：
+//   x-request-id / x-zcode-session-type / x-zcode-trace-id
+// 禁发 x-query-id / x-session-id（start-plan 通道误发触发上游 3012）。
+
+// 可见 ASCII 门：任何头值不含此形态即丢弃该头
+const ASCII_PRINTABLE = /^[\x20-\x7e]+$/;
+
+function clean(value: string | undefined | null): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = value.trim();
+  return v && ASCII_PRINTABLE.test(v) ? v : undefined;
+}
+
+function osCategory(platform: string): string {
+  if (platform === "darwin" || platform === "macos") return "macos";
+  if (platform === "win32" || platform === "windows") return "windows";
+  return "linux";
+}
+
+/** 构建完整身份头（保持官方字段顺序；非法值整头丢弃）。 */
+export function buildIdentityHeaders(profile: DeviceProfile, appVersion: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const set = (key: string, value: string | undefined): void => {
+    if (value) headers[key] = value;
+  };
+  set("HTTP-Referer", clean(HTTP_REFERER));
+  set("User-Agent", clean(userAgent(appVersion)));
+  set("X-ZCode-App-Version", clean(appVersion));
+  set("X-Title", clean(IDENTITY_TITLE));
+  set("X-ZCode-Agent", clean(X_ZCODE_AGENT));
+  set("X-Platform", clean(`${profile.platform}-${profile.arch}`));
+  set("X-Release-Channel", clean(IDENTITY_RELEASE_CHANNEL));
+  set("X-Client-Language", clean(profile.language || IDENTITY_CLIENT_LANGUAGE));
+  set("X-Client-Timezone", clean(profile.timezone || IDENTITY_CLIENT_TIMEZONE));
+  set("X-Os-Category", clean(osCategory(profile.platform)));
+  set("X-Os-Version", clean(profile.osVersion || IDENTITY_OS_VERSION));
+  set("X-Device-Mid", clean(profile.deviceMid));
+  return headers;
+}
+
+/**
+ * 追踪头：每请求全新 UUID。
+ * start-plan（JWT 通道）只发这三个头，永不发 x-query-id / x-session-id。
+ */
+export function buildTraceHeaders(): Record<string, string> {
+  return {
+    "x-request-id": randomUUID(),
+    "x-zcode-session-type": "main",
+    "x-zcode-trace-id": randomUUID(),
+  };
+}
+
+// ── 桌面端版本号探测（折叠自 version.ts；语义原样，调用方经由本模块） ─────────
+// 显式优先顺序：configVersion > ZCODE_APP_VERSION 环境变量 > 本地探测
+// （注册表 > exe > runtime）> null（调用方回落 CLIENT_APP_VERSION_DEFAULT）。
+// 同步构造、永不 throw：探测失败一律返回 null。
+// 缓存只缓存探测成功值；显式值（config/env）每次现算、bypass 缓存。
+
+const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+
+/** 从任意文本里提取首个 x.y.z（"3.14.3.7762" 取 "3.14.3"；"ZCode 3.14.3" 取 "3.14.3"）。 */
+function pickVersion(text: string): string | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text ?? "");
+  return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
+}
+
+function compareParts(a: number[], b: number[]): number {
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0);
+  }
+  return 0;
+}
+
+/** 多个干净 x.y.z 取最大（数值逐段比较）。 */
+function maxVersion(candidates: string[]): string | null {
+  let best: number[] | null = null;
+  let bestRaw = "";
+  for (const c of candidates) {
+    const m = VERSION_RE.exec((c ?? "").trim());
+    if (!m) continue;
+    const parts = [Number(m[1]), Number(m[2]), Number(m[3])];
+    if (!best || compareParts(parts, best) > 0) {
+      best = parts;
+      bestRaw = (c ?? "").trim();
+    }
+  }
+  return best ? bestRaw : null;
+}
+
+/** 注册表：卸载项里 DisplayVersion 优先、无则从 DisplayName 取（实机为 "ZCode 3.14.3"）。仅 win32。 */
+function versionFromRegistry(): string | null {
+  if (process.platform !== "win32") return null;
+  const found: string[] = [];
+  const hives = [
+    "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  ];
+  for (const hive of hives) {
+    let out = "";
+    try {
+      out = execFileSync("reg", ["query", hive, "/s", "/f", "ZCode"], {
+        timeout: 10_000,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      continue; // 注册表不可读——尝试下一个 hive
+    }
+    for (const block of out.split(/\r?\n\s*\r?\n/)) {
+      if (!/zcode/i.test(block)) continue;
+      for (const line of block.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (/^DisplayVersion\s+REG_SZ/i.test(trimmed)) {
+          const v = pickVersion(trimmed);
+          if (v) found.push(v);
+        }
+      }
+      // 无 DisplayVersion 时从 DisplayName 取版本段
+      const nameLine = block
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => /^DisplayName\s+REG_SZ/i.test(l));
+      if (nameLine) {
+        const v = pickVersion(nameLine);
+        if (v) found.push(v);
+      }
+    }
+  }
+  return maxVersion(found);
+}
+
+/** 各平台 ZCode 主程序候选（只做存在性过滤，不拉起）。 */
+function zcodeExeCandidates(): string[] {
+  const out: string[] = [];
+  if (process.platform === "win32") {
+    const localAppData = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
+    const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
+    const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    out.push(
+      join(localAppData, "Programs", "ZCode", "ZCode.exe"),
+      join(pf, "ZCode", "ZCode.exe"),
+      join(pf86, "ZCode", "ZCode.exe"),
+    );
+  } else if (process.platform === "darwin") {
+    out.push("/Applications/ZCode.app/Contents/MacOS/ZCode");
+  } else {
+    out.push("/usr/bin/zcode", "/usr/local/bin/zcode", "/opt/ZCode/zcode");
+    for (const dir of (process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin").split(delimiter)) {
+      if (dir) out.push(join(dir, "zcode"));
+    }
+  }
+  return [...new Set(out)].filter((p) => existsSync(p));
+}
+
+/**
+ * exe：只读版本资源、永不拉起 GUI。
+ * win32 读 PE ProductVersion；darwin 读 Info.plist；linux 无免拉起版本源、直接跳过走 runtime。
+ * （实测 ZCode.exe --version 会启动主进程，故全平台禁用 --version 探测。）
+ */
+function versionFromExe(): string | null {
+  for (const exe of zcodeExeCandidates()) {
+    try {
+      if (process.platform === "win32") {
+        const out = execFileSync(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", `(Get-Item '${exe}').VersionInfo.ProductVersion`],
+          { timeout: 15_000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+        );
+        const v = pickVersion(out);
+        if (v) return v;
+        continue;
+      }
+      if (process.platform === "darwin") {
+        const plist = join(exe, "..", "..", "Info.plist");
+        if (!existsSync(plist)) continue;
+        const text = readFileSync(plist, "utf8");
+        const m = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(text);
+        const v = m ? pickVersion(m[1] ?? "") : null;
+        if (v) return v;
+      }
+    } catch {
+      // 该 exe 读不到版本——试下一个候选
+    }
+  }
+  return null;
+}
+
+/** runtime：~/.zcode/v2/runtime/provider/<platform>/ 下的版本目录取最大。 */
+function versionFromRuntime(): string | null {
+  const providerDir = join(homedir(), ".zcode", "v2", "runtime", "provider");
+  let platforms: string[] = [];
+  try {
+    platforms = readdirSync(providerDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return null;
+  }
+  const found: string[] = [];
+  for (const plat of platforms) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(join(providerDir, plat), { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (VERSION_RE.test(name.trim())) found.push(name.trim());
+    }
+  }
+  return maxVersion(found);
+}
+
+/** 本地探测（注册表 > exe > runtime），永不 throw，失败返回 null。 */
+export function detectLocalZCodeAppVersion(): string | null {
+  try {
+    return versionFromRegistry() ?? versionFromExe() ?? versionFromRuntime();
+  } catch {
+    return null;
+  }
+}
+
+/** 只缓存探测成功值；失败（null）不缓存，下次调用重探。 */
+let probedCache: string | null = null;
+
+/**
+ * 解析最终 appVersion：config 显式值 > ZCODE_APP_VERSION 环境变量 > 本地探测 > null。
+ * 显式值（config/env）bypass 缓存；都找不到返回 null，由调用方回落 CLIENT_APP_VERSION_DEFAULT。
+ */
+export function resolveZCodeAppVersion(opts?: { configVersion?: string }): string | null {
+  const explicit = opts?.configVersion?.trim() ?? "";
+  if (explicit) return explicit;
+  const fromEnv = process.env["ZCODE_APP_VERSION"]?.trim() ?? "";
+  if (fromEnv) return fromEnv;
+  if (probedCache) return probedCache;
+  const detected = detectLocalZCodeAppVersion();
+  if (detected) probedCache = detected;
+  return detected;
+}
 
 // ── body 归一 ────────────────────────────────────────────────────────────────
 
@@ -214,6 +505,166 @@ export function parseRetryAfter(value: string | null): number | null {
   const secs = Number(value.trim());
   if (!Number.isFinite(secs) || secs <= 0) return null;
   return Math.min(Math.floor(secs), RETRY_429_WAIT_MAX_S);
+}
+
+// ── Start Plan 调度内核（收拢自 client.ts dispatchAnthropic） ──────────────────
+// 一次 Forward 所需的 JWT / 身份-trace 头 / body 变换 / 验证码重试 / 429-5xx
+// 重试全部收进本接口之后，client.ts 只调 dispatchStartPlan，不再直引
+// body-transform / captcha / fingerprint / version / constants。
+// body 原地 mutation 语义、全局 captcha 池、device-file 落盘语义均保持原样
+// （经由 transformBody / getVerifyParam / profileForJwt 透传）。
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface StartPlanForwardOptions {
+  jwt: string;
+  appVersion: string;
+  deviceFile: string;
+  timeoutMs: number;
+}
+
+/**
+ * 解析最终 appVersion（含默认回落）：config 显式值 > 环境变量 > 本地探测 >
+ * CLIENT_APP_VERSION_DEFAULT。client 构造时经由本函数，不再直引 version/constants。
+ */
+export function resolveStartPlanAppVersion(configVersion?: string): string {
+  return resolveZCodeAppVersion({ configVersion }) ?? CLIENT_APP_VERSION_DEFAULT;
+}
+
+/** 解析 device 指纹文件路径（fingerprint.store 的薄转发，调用方经由本模块）。 */
+export function resolveStartPlanDeviceFile(configured?: string): string {
+  return resolveDeviceFileImpl(configured);
+}
+
+/**
+ * 单账号调度：成功或 4xx 回传时返回 UpstreamResult，其余按错误语义抛 ProviderError。
+ * 语义与原 client.ts dispatchAnthropic 逐行一致：
+ *  - 验证码挑战：换码重试最多 3 次
+ *  - 402/额度关键词 → EXHAUSTED，直接抛 402
+ *  - 429：按 Retry-After（封顶 120s）原地重试最多 5 次
+ *  - 401/403（非验证码）→ INVALID，直接抛
+ *  - 405/3012 → DISABLED（风控），直接抛
+ *  - 5xx：重试 3 次（间隔 5s）
+ *  - 其他 4xx：原样回传
+ */
+export async function dispatchStartPlan(
+  body: AnthropicBody,
+  opts: StartPlanForwardOptions,
+): Promise<import("../../types.js").UpstreamResult> {
+  const { jwt, appVersion, deviceFile, timeoutMs } = opts;
+  const profile = profileForJwt(jwtUserId(jwt), deviceFile);
+  let verifyParam: string | null = null;
+  let verifyRegion: string | null = null;
+  let captchaRetries = 0;
+  let retries429 = 0;
+  let retries5xx = 0;
+
+  for (;;) {
+    const { url, headers, payload } = buildUpstreamRequest({
+      jwt,
+      profile,
+      appVersion,
+      body,
+      verifyParam,
+      verifyRegion,
+    });
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: payload,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      // 连接失败/超时按 5xx 类重试
+      if (retries5xx < MAX_5XX_RETRIES) {
+        retries5xx += 1;
+        await sleep(RETRY_5XX_WAIT_MS);
+        continue;
+      }
+      throw new ProviderError(
+        `zcode: upstream request failed after ${MAX_5XX_RETRIES} retries: ${(err as Error).message}`,
+        502,
+      );
+    }
+
+    if (res.status < 400) return toUpstreamResult(res);
+
+    const text = await res.text();
+
+    // 验证码挑战：换码重试最多 3 次（solver 二期前多为空值重试）
+    if (detectCaptchaChallenge(res.status, text, res.headers)) {
+      captchaRetries += 1;
+      if (captchaRetries > MAX_CAPTCHA_RETRIES) {
+        throw new ProviderError(
+          `zcode: captcha challenge unresolved after ${MAX_CAPTCHA_RETRIES} retries (upstream ${res.status}): ${text.slice(0, 500)}`,
+          403,
+        );
+      }
+      const token = await getVerifyParam(appVersion);
+      verifyParam = token?.param ?? null;
+      verifyRegion = token?.region ?? null;
+      continue;
+    }
+
+    // 风控（3012/unusual activity / 405）→ DISABLED，直接抛
+    if (isRiskControl(res.status, text)) {
+      throw new ProviderError(
+        `zcode: DISABLED — upstream risk control (status ${res.status}): ${text.slice(0, 500)}`,
+        res.status,
+      );
+    }
+
+    // 402/额度关键词 → EXHAUSTED，直接抛 402
+    if (isExhausted(res.status, text)) {
+      throw new ProviderError(
+        `zcode: EXHAUSTED — plan quota used up (upstream ${res.status}): ${text.slice(0, 500)}`,
+        402,
+      );
+    }
+
+    // 401/403（已排除验证码挑战）→ INVALID，直接抛
+    if (res.status === 401 || res.status === 403) {
+      throw new ProviderError(
+        `zcode: INVALID — upstream rejected credentials (status ${res.status}): ${text.slice(0, 500)}`,
+        res.status,
+      );
+    }
+
+    // 429：按 Retry-After（封顶 120s）原地重试最多 5 次
+    if (res.status === 429) {
+      if (retries429 < MAX_429_RETRIES) {
+        retries429 += 1;
+        const waitS = parseRetryAfter(res.headers.get("retry-after")) ?? RETRY_429_DEFAULT_WAIT_S;
+        await sleep(waitS * 1000);
+        continue;
+      }
+      throw new ProviderError(
+        `zcode: rate limited, 429 retries exhausted (upstream 429): ${text.slice(0, 500)}`,
+        429,
+      );
+    }
+
+    // 5xx：重试 3 次（间隔 5s）
+    if (res.status >= 500) {
+      if (retries5xx < MAX_5XX_RETRIES) {
+        retries5xx += 1;
+        await sleep(RETRY_5XX_WAIT_MS);
+        continue;
+      }
+      throw new ProviderError(
+        `zcode: upstream error ${res.status} after ${MAX_5XX_RETRIES} retries: ${text.slice(0, 500)}`,
+        502,
+      );
+    }
+
+    // 其他 4xx：原样回传（收拢至 base.upstreamError，语义不变）。
+    return upstreamError(res, text);
+  }
 }
 
 // ── OpenAI 双向翻译最小集 ────────────────────────────────────────────────────

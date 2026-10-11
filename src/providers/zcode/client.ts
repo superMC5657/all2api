@@ -1,13 +1,18 @@
 /**
- * ZCode Start Plan（JWT）提供方。
+ * ZCode Start Plan（JWT）提供方（薄适配器）。
  *
  * 单账号直透：Anthropic 与 OpenAI 双协议统一走
  *   https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages
- * Bearer JWT + 身份/trace/验证码头 + body 变换（见 start-plan/）。
+ * Bearer JWT + 身份/trace/验证码头 + body 变换（见 start-plan/agent 内核）。
  * OpenAI 请求先做 OpenAI→Anthropic 最小转换；非流原样回译，
  * 流透传时做 StreamConverter 翻译 + 首 role chunk + 尾 [DONE]。
  *
- * 错误语义（单账号，无换号；抛错带 upstream status+body）：
+ * 本文件只做协议适配（Anthropic/OpenAI 出入口 + OpenAI 错误形/流合成）：
+ * 一次 Forward 所需的 JWT、身份头、body 变换、验证码/429/5xx 重试
+ * 全部由 start-plan/agent.dispatchStartPlan 拥有，不再直引
+ * constants / body-transform / captcha / fingerprint / version。
+ *
+ * 错误语义（单账号，无换号；抛错带 upstream status+body）见 agent.dispatchStartPlan：
  *  - 验证码挑战：换码重试最多 3 次
  *  - 402/额度关键词 → EXHAUSTED，直接抛 402
  *  - 429：按 Retry-After（封顶 120s）原地重试最多 5 次
@@ -18,38 +23,20 @@
  */
 
 import type { ProviderAdapter, UpstreamResult } from "../types.js";
-import { ProviderError, toUpstreamResult } from "../types.js";
-import { badRequest, readStreamText, tryParseJsonObject, upstreamError } from "../base.js";
+import { ProviderError } from "../types.js";
+import { badRequest, readStreamText, tryParseJsonObject } from "../base.js";
 import type { ZCodeProviderConfig } from "../../config.js";
 import { readZCodeCredentials } from "./credentials.js";
-import { CLIENT_APP_VERSION_DEFAULT } from "./start-plan/constants.js";
-import {
-  MAX_429_RETRIES,
-  MAX_5XX_RETRIES,
-  MAX_CAPTCHA_RETRIES,
-  RETRY_429_DEFAULT_WAIT_S,
-  RETRY_5XX_WAIT_MS,
-} from "./start-plan/constants.js";
 import {
   StreamConverter,
   anthropicToOpenai,
-  buildUpstreamRequest,
-  detectCaptchaChallenge,
-  isExhausted,
-  isRiskControl,
+  dispatchStartPlan,
   normalizeBody,
   openaiToAnthropic,
-  parseRetryAfter,
+  resolveStartPlanAppVersion,
+  resolveStartPlanDeviceFile,
   type AnthropicBody,
 } from "./start-plan/agent.js";
-import { jwtUserId } from "./start-plan/body-transform.js";
-import { getVerifyParam } from "./start-plan/captcha.js";
-import { profileForJwt, resolveDeviceFile } from "./start-plan/fingerprint.js";
-import { resolveZCodeAppVersion } from "./start-plan/version.js";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /** 上游 4xx 透传体 → OpenAI 错误形（保留原 status；captcha/429/5xx 的 throw 路径不受影响）。 */
 function upstreamErrorToOpenai(status: number, text: string): UpstreamResult {
@@ -170,9 +157,9 @@ export class ZCodeProvider implements ProviderAdapter {
       );
     }
     this.jwt = jwt;
-    // 缺省跟随本地（config 显式值 > ZCODE_APP_VERSION > 注册表 > exe > runtime），找不到回落常量
-    this.appVersion = resolveZCodeAppVersion({ configVersion: config.appVersion }) ?? CLIENT_APP_VERSION_DEFAULT;
-    this.deviceFile = resolveDeviceFile(config.deviceFile);
+    // 缺省跟随本地（config 显式值 > ZCODE_APP_VERSION > 注册表 > exe > runtime），找不到回落常量（经由 agent 内核解析）
+    this.appVersion = resolveStartPlanAppVersion(config.appVersion);
+    this.deviceFile = resolveStartPlanDeviceFile(config.deviceFile);
     this.timeoutMs = timeoutMs;
     this.modelList = config.models;
   }
@@ -258,118 +245,13 @@ export class ZCodeProvider implements ProviderAdapter {
     };
   }
 
-  /** 单账号调度：成功或 4xx 回传时返回 UpstreamResult，其余按错误语义抛 ProviderError。 */
+  /** 单账号调度（薄转发）：真实重试/验证码语义由 agent.dispatchStartPlan 拥有。 */
   private async dispatchAnthropic(body: AnthropicBody): Promise<UpstreamResult> {
-    const profile = profileForJwt(jwtUserId(this.jwt), this.deviceFile);
-    let verifyParam: string | null = null;
-    let verifyRegion: string | null = null;
-    let captchaRetries = 0;
-    let retries429 = 0;
-    let retries5xx = 0;
-
-    for (;;) {
-      const { url, headers, payload } = buildUpstreamRequest({
-        jwt: this.jwt,
-        profile,
-        appVersion: this.appVersion,
-        body,
-        verifyParam,
-        verifyRegion,
-      });
-
-      let res: Response;
-      try {
-        res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: payload,
-          signal: AbortSignal.timeout(this.timeoutMs),
-        });
-      } catch (err) {
-        // 连接失败/超时按 5xx 类重试
-        if (retries5xx < MAX_5XX_RETRIES) {
-          retries5xx += 1;
-          await sleep(RETRY_5XX_WAIT_MS);
-          continue;
-        }
-        throw new ProviderError(
-          `zcode: upstream request failed after ${MAX_5XX_RETRIES} retries: ${(err as Error).message}`,
-          502,
-        );
-      }
-
-      if (res.status < 400) return toUpstreamResult(res);
-
-      const text = await res.text();
-
-      // 验证码挑战：换码重试最多 3 次（solver 二期前多为空值重试）
-      if (detectCaptchaChallenge(res.status, text, res.headers)) {
-        captchaRetries += 1;
-        if (captchaRetries > MAX_CAPTCHA_RETRIES) {
-          throw new ProviderError(
-            `zcode: captcha challenge unresolved after ${MAX_CAPTCHA_RETRIES} retries (upstream ${res.status}): ${text.slice(0, 500)}`,
-            403,
-          );
-        }
-        const token = await getVerifyParam(this.appVersion);
-        verifyParam = token?.param ?? null;
-        verifyRegion = token?.region ?? null;
-        continue;
-      }
-
-      // 风控（3012/unusual activity / 405）→ DISABLED，直接抛
-      if (isRiskControl(res.status, text)) {
-        throw new ProviderError(
-          `zcode: DISABLED — upstream risk control (status ${res.status}): ${text.slice(0, 500)}`,
-          res.status,
-        );
-      }
-
-      // 402/额度关键词 → EXHAUSTED，直接抛 402
-      if (isExhausted(res.status, text)) {
-        throw new ProviderError(
-          `zcode: EXHAUSTED — plan quota used up (upstream ${res.status}): ${text.slice(0, 500)}`,
-          402,
-        );
-      }
-
-      // 401/403（已排除验证码挑战）→ INVALID，直接抛
-      if (res.status === 401 || res.status === 403) {
-        throw new ProviderError(
-          `zcode: INVALID — upstream rejected credentials (status ${res.status}): ${text.slice(0, 500)}`,
-          res.status,
-        );
-      }
-
-      // 429：按 Retry-After（封顶 120s）原地重试最多 5 次
-      if (res.status === 429) {
-        if (retries429 < MAX_429_RETRIES) {
-          retries429 += 1;
-          const waitS = parseRetryAfter(res.headers.get("retry-after")) ?? RETRY_429_DEFAULT_WAIT_S;
-          await sleep(waitS * 1000);
-          continue;
-        }
-        throw new ProviderError(
-          `zcode: rate limited, 429 retries exhausted (upstream 429): ${text.slice(0, 500)}`,
-          429,
-        );
-      }
-
-      // 5xx：重试 3 次（间隔 5s）
-      if (res.status >= 500) {
-        if (retries5xx < MAX_5XX_RETRIES) {
-          retries5xx += 1;
-          await sleep(RETRY_5XX_WAIT_MS);
-          continue;
-        }
-        throw new ProviderError(
-          `zcode: upstream error ${res.status} after ${MAX_5XX_RETRIES} retries: ${text.slice(0, 500)}`,
-          502,
-        );
-      }
-
-      // 其他 4xx：原样回传（收拢至 base.upstreamError，语义不变）。
-      return upstreamError(res, text);
-    }
+    return dispatchStartPlan(body, {
+      jwt: this.jwt,
+      appVersion: this.appVersion,
+      deviceFile: this.deviceFile,
+      timeoutMs: this.timeoutMs,
+    });
   }
 }
