@@ -5,11 +5,12 @@ import { join } from "node:path";
 import {
   TRAE_APP_ID,
   TRAE_STORAGE_KEY,
-  buildTraeHeaders,
   findTraeStorageEntry,
   parseTraeAuthBuffer,
-  resolveTraeDeviceIds,
+  readTokenFile,
+  readTraeStorageDoc,
   traeAppDataRoot,
+  traeHeadersForIdentity,
   traeStorageValueToBuffer,
   type TraeDataCandidate,
   type TraeDeviceIds,
@@ -79,15 +80,7 @@ export function listTraeIntlCandidates(opts?: TraeIntlCandidateOptions): TraeDat
   return TRAE_INTL_EDITIONS.map(toIntlCandidate);
 }
 
-function readTokenFile(path: string): string | null {
-  try {
-    if (!existsSync(path)) return null;
-    const text = readFileSync(path, "utf8").trim();
-    return text || null;
-  } catch {
-    return null;
-  }
-}
+// 单行 token 文件读取复用 trae-cn.readTokenFile（原两处同形，此处不再自带一份）。
 
 export interface TraeIdentity {
   token: string;
@@ -189,21 +182,11 @@ export class TraeCredentials {
     );
   }
 
-  /** 后端请求头（与 CN 同形；Intl 聊天留空前供诊断与 ProjectEio 预留）。 */
+  /** 后端请求头（与 CN 同形，复用 trae-cn.traeHeadersForIdentity；Intl 聊天留空前供诊断与 ProjectEio 预留）。 */
   async headers(): Promise<Record<string, string>> {
     const identity = await this.get();
-    let storageDoc: Record<string, unknown> | undefined;
-    if (identity.dataDir) {
-      try {
-        storageDoc = JSON.parse(readFileSync(join(identity.dataDir, "globalStorage", "storage.json"), "utf8")) as Record<string, unknown>;
-      } catch {
-        storageDoc = undefined;
-      }
-    }
-    const device: TraeDeviceIds = resolveTraeDeviceIds({ userDir: identity.dataDir || undefined, storageDoc });
-    const ideVersion = this.opts?.ideVersion?.trim() || process.env["TRAE_IDE_VERSION"]?.trim() || device.ideVersion || "unknown";
-    const userAgent = this.opts?.userAgent?.trim() || `Trae/${ideVersion}`;
-    return buildTraeHeaders(identity, device, userAgent, ideVersion);
+    const storageDoc = readTraeStorageDoc(identity.dataDir);
+    return traeHeadersForIdentity(identity, storageDoc, this.opts);
   }
 }
 

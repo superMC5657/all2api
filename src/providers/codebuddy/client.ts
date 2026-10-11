@@ -1,5 +1,15 @@
 import type { ProviderAdapter, UpstreamResult } from "../types.js";
-import { extractStreamFlag, rewriteModel, toUpstreamResult } from "../types.js";
+import { toUpstreamResult } from "../types.js";
+import {
+  ensureStreamOptions,
+  okJson,
+  okStream,
+  rewriteModelToObject,
+  streamSignal,
+  upstreamError,
+  wantsStreamForAnthropic,
+  wantsStreamFromOpenAIBody,
+} from "../base.js";
 import { anthropicToOpenAI, openAIToAnthropicResponse, translateOpenAIStreamToAnthropic } from "../../translate/anthropic.js";
 import type { AnthropicRequest } from "../../translate/anthropic.js";
 import { aggregateOpenAIStream } from "../../translate/openai-aggregate.js";
@@ -55,53 +65,49 @@ export class CodeBuddyProvider implements ProviderAdapter {
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
-    const body = JSON.parse(rewriteModel(rawBody, model)) as Record<string, unknown>;
-    const clientWantsStream = body["stream"] === true;
+    const body = rewriteModelToObject(rawBody, model);
+    const clientWantsStream = wantsStreamFromOpenAIBody(body);
     // 网关只提供流式响应
     body["stream"] = true;
-    if (!body["stream_options"]) body["stream_options"] = { include_usage: true };
+    ensureStreamOptions(body);
     sanitizeToolChoice(body);
 
     const res = await this.send(JSON.stringify(body), { stream: clientWantsStream });
     if (!res.ok) {
-      return { status: res.status, contentType: res.headers.get("content-type") ?? "application/json", body: await res.text() };
+      return upstreamError(res, await res.text());
     }
     if (clientWantsStream) return toUpstreamResult(res);
     const aggregated = await aggregateOpenAIStream(res.body as ReadableStream<Uint8Array>);
-    return { status: 200, contentType: "application/json", body: JSON.stringify(aggregated) };
+    return okJson(aggregated);
   }
 
   async anthropic(model: string, rawBody: string): Promise<UpstreamResult> {
     const req = JSON.parse(rawBody) as AnthropicRequest;
     req.model = model;
     const openaiBody = anthropicToOpenAI(req) as Record<string, unknown>;
-    const clientWantsStream = extractStreamFlag(rawBody) || openaiBody["stream"] === true;
+    const clientWantsStream = wantsStreamForAnthropic(rawBody, openaiBody);
     openaiBody["stream"] = true;
-    if (!openaiBody["stream_options"]) openaiBody["stream_options"] = { include_usage: true };
+    ensureStreamOptions(openaiBody);
     sanitizeToolChoice(openaiBody);
 
     const res = await this.send(JSON.stringify(openaiBody), { stream: clientWantsStream });
     if (!res.ok) {
-      return { status: res.status, contentType: res.headers.get("content-type") ?? "application/json", body: await res.text() };
+      return upstreamError(res, await res.text());
     }
     if (clientWantsStream) {
-      return {
-        status: 200,
-        contentType: "text/event-stream",
-        body: translateOpenAIStreamToAnthropic(res.body as ReadableStream<Uint8Array>, model),
-      };
+      return okStream(translateOpenAIStreamToAnthropic(res.body as ReadableStream<Uint8Array>, model));
     }
     const aggregated = await aggregateOpenAIStream(res.body as ReadableStream<Uint8Array>);
-    return { status: 200, contentType: "application/json", body: JSON.stringify(openAIToAnthropicResponse(aggregated, model)) };
+    return okJson(openAIToAnthropicResponse(aggregated, model));
   }
 
   private async send(body: string, opts: { stream: boolean }): Promise<Response> {
     // 流式请求不设整体超时，由客户端断连驱动取消；非流式保留超时。
     // 注意：每次 fetch 前新建 AbortSignal——AbortSignal.timeout 从创建起点计时，
     // 复用首次的 signal 会导致 401 重试时立即 TimeoutError（误报 502）。
-    const makeSignal = () => (opts.stream ? undefined : AbortSignal.timeout(this.timeoutMs));
+    // 信号构造收拢至 base.streamSignal（语义不变：此处调用两次，各自新建）。
     const headers = await this.credentials.headers();
-    const signal = makeSignal();
+    const signal = streamSignal(this.timeoutMs, opts.stream);
     let res = await fetch(chatUrlFor(headers["x-domain"], this.region), {
       method: "POST",
       headers,
@@ -113,7 +119,7 @@ export class CodeBuddyProvider implements ProviderAdapter {
       await res.body?.cancel();
       await this.credentials.refresh();
       const retryHeaders = await this.credentials.headers();
-      const retrySignal = makeSignal();
+      const retrySignal = streamSignal(this.timeoutMs, opts.stream);
       res = await fetch(chatUrlFor(retryHeaders["x-domain"], this.region), {
         method: "POST",
         headers: retryHeaders,

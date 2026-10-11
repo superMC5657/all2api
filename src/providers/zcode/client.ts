@@ -19,6 +19,7 @@
 
 import type { ProviderAdapter, UpstreamResult } from "../types.js";
 import { ProviderError, toUpstreamResult } from "../types.js";
+import { badRequest, readStreamText, tryParseJsonObject, upstreamError } from "../base.js";
 import type { ZCodeProviderConfig } from "../../config.js";
 import { readZCodeCredentials } from "./credentials.js";
 import { CLIENT_APP_VERSION_DEFAULT } from "./start-plan/constants.js";
@@ -48,14 +49,6 @@ import { resolveZCodeAppVersion } from "./start-plan/version.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function badRequest(message: string): UpstreamResult {
-  return {
-    status: 400,
-    contentType: "application/json",
-    body: JSON.stringify({ error: { message, type: "invalid_request_error" } }),
-  };
 }
 
 /** 上游 4xx 透传体 → OpenAI 错误形（保留原 status；captcha/429/5xx 的 throw 路径不受影响）。 */
@@ -90,23 +83,6 @@ function upstreamErrorToOpenai(status: number, text: string): UpstreamResult {
     contentType: "application/json",
     body: JSON.stringify({ error: { message, type } }),
   };
-}
-
-async function readStreamText(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let out = "";
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      out += decoder.decode(value, { stream: true });
-    }
-    out += decoder.decode();
-    return out;
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 /** 上游 Anthropic SSE 流 → OpenAI chunk 流（含首 role chunk 与尾 [DONE]）。 */
@@ -206,32 +182,22 @@ export class ZCodeProvider implements ProviderAdapter {
   }
 
   async anthropic(model: string, rawBody: string): Promise<UpstreamResult> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawBody);
-    } catch {
+    const parsed = tryParseJsonObject(rawBody);
+    if (!parsed) {
       return badRequest('request body must be JSON with a "model" field');
     }
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return badRequest('request body must be JSON with a "model" field');
-    }
-    const body = parsed as AnthropicBody;
+    const body = parsed as unknown as AnthropicBody;
     body["model"] = model;
     normalizeBody(body);
     return this.dispatchAnthropic(body);
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(rawBody);
-    } catch {
+    const parsed = tryParseJsonObject(rawBody);
+    if (!parsed) {
       return badRequest('request body must be JSON with a "model" field');
     }
-    if (payload == null || typeof payload !== "object" || Array.isArray(payload)) {
-      return badRequest('request body must be JSON with a "model" field');
-    }
-    const record = payload as Record<string, any>;
+    const record = parsed as Record<string, any>;
     if (typeof record["model"] === "string" && (record["model"] as string).includes("/")) {
       record["model"] = (record["model"] as string).split("/").slice(1).join("/");
     }
@@ -402,12 +368,8 @@ export class ZCodeProvider implements ProviderAdapter {
         );
       }
 
-      // 其他 4xx：原样回传
-      return {
-        status: res.status,
-        contentType: res.headers.get("content-type") ?? "application/json",
-        body: text,
-      };
+      // 其他 4xx：原样回传（收拢至 base.upstreamError，语义不变）。
+      return upstreamError(res, text);
     }
   }
 }

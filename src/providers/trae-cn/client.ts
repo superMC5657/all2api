@@ -1,5 +1,15 @@
 import type { ProviderAdapter, UpstreamResult } from "../types.js";
-import { extractStreamFlag, ProviderError } from "../types.js";
+import { ProviderError } from "../types.js";
+import {
+  badRequest,
+  okJson,
+  okStream,
+  streamSignal,
+  tryParseJsonObject,
+  upstreamError,
+  wantsStreamForAnthropic,
+  wantsStreamFromOpenAIBody,
+} from "../base.js";
 import { anthropicToOpenAI, openAIToAnthropicResponse, translateOpenAIStreamToAnthropic } from "../../translate/anthropic.js";
 import type { AnthropicRequest } from "../../translate/anthropic.js";
 import { aggregateOpenAIStream } from "../../translate/openai-aggregate.js";
@@ -314,18 +324,12 @@ export class TraeCnProvider implements ProviderAdapter {
   }
 
   async openai(model: string, rawBody: string): Promise<UpstreamResult> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawBody) as unknown;
-    } catch {
+    const openaiBody = tryParseJsonObject(rawBody);
+    if (!openaiBody) {
       return badRequest('request body must be JSON with a "model" field');
     }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return badRequest('request body must be JSON with a "model" field');
-    }
-    const openaiBody = parsed as Record<string, unknown>;
     openaiBody["model"] = model;
-    const clientWantsStream = openaiBody["stream"] === true;
+    const clientWantsStream = wantsStreamFromOpenAIBody(openaiBody);
     let upstream: Response;
     try {
       upstream = await this.send(JSON.stringify(buildTraeChatBody(model, openaiBody)), { stream: clientWantsStream });
@@ -333,7 +337,7 @@ export class TraeCnProvider implements ProviderAdapter {
       throw err instanceof ProviderError ? err : new ProviderError(`trae-cn: upstream request failed: ${(err as Error).message}`, 502);
     }
     if (!upstream.ok) {
-      return { status: upstream.status, contentType: upstream.headers.get("content-type") ?? "application/json", body: await upstream.text() };
+      return upstreamError(upstream, await upstream.text());
     }
     let stream: ReadableStream<Uint8Array>;
     try {
@@ -342,30 +346,26 @@ export class TraeCnProvider implements ProviderAdapter {
       throw err instanceof ProviderError ? err : new ProviderError((err as Error).message, 502);
     }
     if (clientWantsStream) {
-      return { status: 200, contentType: "text/event-stream", body: stream };
+      return okStream(stream);
     }
     try {
       const aggregated = await aggregateOpenAIStream(stream);
       aggregated.model = model;
-      return { status: 200, contentType: "application/json", body: JSON.stringify(aggregated) };
+      return okJson(aggregated);
     } catch (err) {
       throw new ProviderError(`trae-cn: aggregate upstream stream failed: ${(err as Error).message}`, 502);
     }
   }
 
   async anthropic(model: string, rawBody: string): Promise<UpstreamResult> {
-    let req: AnthropicRequest;
-    try {
-      req = JSON.parse(rawBody) as AnthropicRequest;
-    } catch {
+    const parsed = tryParseJsonObject(rawBody);
+    if (!parsed) {
       return badRequest('request body must be JSON with a "model" field');
     }
-    if (typeof req !== "object" || req === null || Array.isArray(req)) {
-      return badRequest('request body must be JSON with a "model" field');
-    }
+    const req = parsed as unknown as AnthropicRequest;
     req.model = model;
     const openaiBody = anthropicToOpenAI(req) as Record<string, unknown>;
-    const clientWantsStream = extractStreamFlag(rawBody) || openaiBody["stream"] === true;
+    const clientWantsStream = wantsStreamForAnthropic(rawBody, openaiBody);
     let upstream: Response;
     try {
       upstream = await this.send(JSON.stringify(buildTraeChatBody(model, openaiBody)), { stream: clientWantsStream });
@@ -373,7 +373,7 @@ export class TraeCnProvider implements ProviderAdapter {
       throw err instanceof ProviderError ? err : new ProviderError(`trae-cn: upstream request failed: ${(err as Error).message}`, 502);
     }
     if (!upstream.ok || upstream.body === null) {
-      return { status: upstream.status, contentType: upstream.headers.get("content-type") ?? "application/json", body: await upstream.text() };
+      return upstreamError(upstream, await upstream.text());
     }
     let stream: ReadableStream<Uint8Array>;
     try {
@@ -382,12 +382,12 @@ export class TraeCnProvider implements ProviderAdapter {
       throw err instanceof ProviderError ? err : new ProviderError((err as Error).message, 502);
     }
     if (clientWantsStream) {
-      return { status: 200, contentType: "text/event-stream", body: translateOpenAIStreamToAnthropic(stream, model) };
+      return okStream(translateOpenAIStreamToAnthropic(stream, model));
     }
     try {
       const aggregated = await aggregateOpenAIStream(stream);
       aggregated.model = model;
-      return { status: 200, contentType: "application/json", body: JSON.stringify(openAIToAnthropicResponse(aggregated, model)) };
+      return okJson(openAIToAnthropicResponse(aggregated, model));
     } catch (err) {
       throw new ProviderError(`trae-cn: aggregate upstream stream failed: ${(err as Error).message}`, 502);
     }
@@ -409,8 +409,8 @@ export class TraeCnProvider implements ProviderAdapter {
 
   private async send(body: string, opts: { stream: boolean }): Promise<Response> {
     // 流式请求不设整体超时，由客户端断连驱动取消；非流式保留超时。
-    // 每次 fetch 前新建 signal，避免复用已计时的 signal 导致重试误报超时。
-    const signal = opts.stream ? undefined : AbortSignal.timeout(this.timeoutMs);
+    // 每次 fetch 前新建 signal，避免复用已计时的 signal 导致重试误报超时（见 base.streamSignal）。
+    const signal = streamSignal(this.timeoutMs, opts.stream);
     const headers = await this.credentials.headers();
     try {
       return await fetch(this.chatUrl, {
@@ -423,12 +423,4 @@ export class TraeCnProvider implements ProviderAdapter {
       throw new ProviderError(`trae-cn: upstream request failed: ${(err as Error).message}`, 502);
     }
   }
-}
-
-function badRequest(message: string): UpstreamResult {
-  return {
-    status: 400,
-    contentType: "application/json",
-    body: JSON.stringify({ error: { message, type: "invalid_request_error" } }),
-  };
 }

@@ -371,6 +371,9 @@ function readTokenFile(path: string): string | null {
   }
 }
 
+/** 明文单行 token 文件读取（trae / trae-cn 共用；原两处同形，收拢至此，trae 侧复用）。 */
+export { readTokenFile };
+
 export interface TraeCnIdentity {
   token: string;
   uid: string;
@@ -520,6 +523,36 @@ export function buildTraeHeaders(identity: { token: string; uid: string }, devic
   return headers;
 }
 
+/** User 目录下 storage.json 尽力读取（缺失/坏文件返回 undefined；CN/Intl 同形）。 */
+export function readTraeStorageDoc(dataDir: string): Record<string, unknown> | undefined {
+  if (!dataDir) return undefined;
+  try {
+    return readJsonFile(join(dataDir, "globalStorage", "storage.json"));
+  } catch {
+    return undefined;
+  }
+}
+
+export interface TraeHeaderOpts {
+  ideVersion?: string;
+  userAgent?: string;
+}
+
+/**
+ * 身份 + storageDoc → 后端请求头（CN/Intl 同形，trae 侧复用；
+ * device/machine/版本号尽力而为，缺失则省略对应头）。
+ */
+export function traeHeadersForIdentity(
+  identity: { token: string; uid: string; dataDir: string },
+  storageDoc: Record<string, unknown> | undefined,
+  opts?: TraeHeaderOpts,
+): Record<string, string> {
+  const device = resolveTraeDeviceIds({ userDir: identity.dataDir || undefined, storageDoc });
+  const ideVersion = opts?.ideVersion?.trim() || process.env["TRAE_IDE_VERSION"]?.trim() || device.ideVersion || "unknown";
+  const userAgent = opts?.userAgent?.trim() || `Trae/${ideVersion}`;
+  return buildTraeHeaders(identity, device, userAgent, ideVersion);
+}
+
 export class TraeCnCredentials {
   private cached: { storagePath: string; mtime: number; identity: TraeCnIdentity } | null = null;
 
@@ -560,21 +593,11 @@ export class TraeCnCredentials {
     );
   }
 
-  /** 后端请求头（device/machine/id 版本号尽力而为，缺失则省略对应头）。 */
+  /** 后端请求头（device/machine/id 版本号尽力而为，缺失则省略对应头；与 Intl 同形，见 traeHeadersForIdentity）。 */
   async headers(): Promise<Record<string, string>> {
     const identity = await this.get();
-    let storageDoc: Record<string, unknown> | undefined;
-    if (identity.dataDir) {
-      try {
-        storageDoc = readJsonFile(join(identity.dataDir, "globalStorage", "storage.json"));
-      } catch {
-        storageDoc = undefined;
-      }
-    }
-    const device = resolveTraeDeviceIds({ userDir: identity.dataDir || undefined, storageDoc });
-    const ideVersion = this.opts?.ideVersion?.trim() || process.env["TRAE_IDE_VERSION"]?.trim() || device.ideVersion || "unknown";
-    const userAgent = this.opts?.userAgent?.trim() || `Trae/${ideVersion}`;
-    return buildTraeHeaders(identity, device, userAgent, ideVersion);
+    const storageDoc = readTraeStorageDoc(identity.dataDir);
+    return traeHeadersForIdentity(identity, storageDoc, this.opts);
   }
 }
 
