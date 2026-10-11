@@ -22,52 +22,19 @@ async function main(): Promise<void> {
     providers.push(await startQoderProvider(cfg.providers.qoder, cfg.upstreamTimeoutMs));
   if (cfg.providers.qoderIntl.enabled)
     providers.push(await startQoderProvider(cfg.providers.qoderIntl, cfg.upstreamTimeoutMs));
+  // region 缺省已在 resolveConfig 归一（codebuddy→"cn"，显式 "auto" 保留），这里直接透传。
   if (cfg.providers.codebuddy.enabled)
-    providers.push(
-      new CodeBuddyProvider({ ...cfg.providers.codebuddy, region: cfg.providers.codebuddy.region ?? "cn" }, cfg.upstreamTimeoutMs, "codebuddy"),
-    );
+    providers.push(new CodeBuddyProvider(cfg.providers.codebuddy, cfg.upstreamTimeoutMs, "codebuddy"));
   // codebuddyIntl（海外，https://www.workbuddy.ai / https://www.codebuddy.ai）：构造期不碰磁盘（懒加载）。
-  // 双开时两边必须配不同的 authDir，否则默认探测会撞到同一份 session。
+  // region 缺省→"intl" 同样由 resolveConfig 落定；双开时两边必须配不同的 authDir，否则默认探测会撞到同一份 session。
   if (cfg.providers.codebuddyIntl.enabled)
-    providers.push(
-      new CodeBuddyProvider(
-        { ...cfg.providers.codebuddyIntl, region: cfg.providers.codebuddyIntl.region ?? "intl" },
-        cfg.upstreamTimeoutMs,
-        "codebuddy-intl",
-      ),
-    );
+    providers.push(new CodeBuddyProvider(cfg.providers.codebuddyIntl, cfg.upstreamTimeoutMs, "codebuddy-intl"));
   // trae (intl, https://api.trae.ai)：MVP 聊天 501 骨架，models 兜底 ["auto"]，构造期不碰磁盘。
-  if (cfg.providers.trae.enabled)
-    providers.push(
-      new TraeProvider(
-        {
-          enabled: cfg.providers.trae.enabled,
-          apiToken: cfg.providers.trae.apiToken,
-          edition: cfg.providers.trae.edition,
-          dataDir: cfg.providers.trae.dataDir || cfg.providers.trae.authDir,
-          ideVersion: cfg.providers.trae.ideVersion,
-          userAgent: cfg.providers.trae.userAgent,
-          models: cfg.providers.trae.models,
-        },
-        cfg.upstreamTimeoutMs,
-      ),
-    );
-  // trae-cn (CN AgentHost https://trae-api-cn.mchost.guru)：直连 llm_utils_chat 轻聊天。
+  // dataDir（dataDir || authDir 归一，dataDir 优先）与 models 兜底已在 resolveConfig 落定，这里直接透传。
+  if (cfg.providers.trae.enabled) providers.push(new TraeProvider(cfg.providers.trae, cfg.upstreamTimeoutMs));
+  // trae-cn (CN AgentHost https://trae-api-cn.mchost.guru)：直连 llm_utils_chat 轻聊天；接线同 trae，直接透传。
   if (cfg.providers["trae-cn"].enabled)
-    providers.push(
-      new TraeCnProvider(
-        {
-          enabled: cfg.providers["trae-cn"].enabled,
-          apiToken: cfg.providers["trae-cn"].apiToken,
-          edition: cfg.providers["trae-cn"].edition,
-          dataDir: cfg.providers["trae-cn"].dataDir || cfg.providers["trae-cn"].authDir,
-          ideVersion: cfg.providers["trae-cn"].ideVersion,
-          userAgent: cfg.providers["trae-cn"].userAgent,
-          models: cfg.providers["trae-cn"].models,
-        },
-        cfg.upstreamTimeoutMs,
-      ),
-    );
+    providers.push(new TraeCnProvider(cfg.providers["trae-cn"], cfg.upstreamTimeoutMs));
   if (providers.length === 0) {
     console.error("[config] all providers are disabled — enable at least one in config.jsonc");
     process.exit(1);

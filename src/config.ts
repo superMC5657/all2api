@@ -160,18 +160,60 @@ export interface All2ApiConfig {
   };
 }
 
+/**
+ * resolve 后的对外配置——loadConfig 唯一返回的形状（收窄后的 Config surface）：
+ * - 顶层 host/port/apiKey 已叠加 env 覆盖，strictModels 已归一为 boolean；
+ * - 各渠道 models 表已规整为非空（缺失/全空回落各渠道默认值；条目 trim 去空），
+ *   forward 的 strictModels 探针（经 provider.models() 读表）与 /v1/models 列表
+ *   拿到的就是这张现成结论，不再各自解读原始 models 表；
+ * - codebuddy 系 region 已补槽位缺省（codebuddy→"cn"、codebuddyIntl→"intl"，
+ *   显式 "auto" 保留），调用方不再 `??`；
+ * - trae 系 dataDir 已是 `dataDir || authDir` 的归一结论（dataDir 优先，缺省 ""），
+ *   调用方直接用 dataDir，不再读 authDir。
+ * 文件格式（config.jsonc / config.example.jsonc）与有效配置语义不变。
+ */
+export interface ResolvedCodeBuddyProviderConfig extends Omit<CodeBuddyProviderConfig, "region" | "models"> {
+  /** 归一结论：显式 cn/intl/auto 保留，其余（缺失/空/非法）回槽位缺省。 */
+  region: "auto" | "cn" | "intl";
+  /** 规整后的非空模型表（缺失/全空回落内置默认表）。 */
+  models: string[];
+}
+
+export interface ResolvedTraeProviderConfig extends Omit<TraeProviderConfig, "dataDir" | "models"> {
+  /**
+   * 归一结论：`dataDir || authDir`（dataDir 优先，取 trim 后首个非空，缺省 ""）。
+   * 调用方直接用此字段；authDir 保留仅为回显文件原值，不要再解读。
+   */
+  dataDir: string;
+  /** 规整后的非空模型表（缺失/全空回落 ["auto"]）。 */
+  models: string[];
+}
+
+export interface ResolvedAll2ApiConfig extends Omit<All2ApiConfig, "providers"> {
+  providers: {
+    zcode: ZCodeProviderConfig;
+    qoder: QoderProviderConfig;
+    qoderIntl: QoderProviderConfig;
+    codebuddy: ResolvedCodeBuddyProviderConfig;
+    codebuddyIntl: ResolvedCodeBuddyProviderConfig;
+    trae: ResolvedTraeProviderConfig;
+    "trae-cn": ResolvedTraeProviderConfig;
+  };
+}
+
 const CONFIG_JSONC_PATH = join(appRoot(), "config.jsonc");
 const CONFIG_LEGACY_PATH = join(appRoot(), "config.json");
 
-/** 解析顺序：优先 config.jsonc；仅 jsonc 缺失且 legacy config.json 存在时回落（warn 一次提示迁移）。 */
-function resolveConfigPath(): string {
-  if (existsSync(CONFIG_JSONC_PATH)) return CONFIG_JSONC_PATH;
-  if (existsSync(CONFIG_LEGACY_PATH)) {
-    console.warn("[config] using legacy config.json — cp config.json config.jsonc to migrate");
-    return CONFIG_LEGACY_PATH;
-  }
-  console.error("[config] config.jsonc not found — cp config.example.jsonc config.jsonc then edit apiKey/providers");
-  process.exit(1);
+/**
+ * 路径解析（load 三步的前置查找，纯判断、无 exit：
+ * 两文件都缺失时返回 null，由最外层 loadConfig 统一报 console.error + process.exit）。
+ * 顺序：优先 config.jsonc；仅 jsonc 缺失且 legacy config.json 存在时回落
+ * （外层 warn 一次提示迁移）。
+ */
+function findConfigPath(): { path: string; isLegacy: boolean } | null {
+  if (existsSync(CONFIG_JSONC_PATH)) return { path: CONFIG_JSONC_PATH, isLegacy: false };
+  if (existsSync(CONFIG_LEGACY_PATH)) return { path: CONFIG_LEGACY_PATH, isLegacy: true };
+  return null;
 }
 
 /**
@@ -402,50 +444,164 @@ function warnNoCredential(region: QoderRegion, port: number): void {
   );
 }
 
-export function loadConfig(): All2ApiConfig {
-  const configPath = resolveConfigPath();
-  const raw = readFileSync(configPath, "utf8");
-  const fileConfig: Partial<All2ApiConfig> = parseJsonc<Partial<All2ApiConfig>>(raw);
+// ── load / resolve / persist 三步 ──────────────────────────────────
+// loadConfig（最外层入口）是唯一碰 process.exit 与磁盘写的地方；
+// 三个步骤函数只做纯逻辑（load 仅读盘，不 exit、不写盘）。
 
-  const cfg: All2ApiConfig = {
-    ...DEFAULTS,
-    ...fileConfig,
+/** 第一步 load 的产物：文件原文 + 解析后的 file shape + 遗留 bridges/qoder-cn.json 的 pat 回退。 */
+interface RawConfigLoad {
+  rawText: string;
+  file: Partial<All2ApiConfig>;
+  legacyQoderCnPat: string;
+}
+
+/** 遗留回退：bridges/qoder-cn.json 里遗留的 pat（读不到/非法一律当没有）。 */
+function readLegacyQoderCnPat(): string {
+  try {
+    const legacyPath = join(appRoot(), "bridges", "qoder-cn.json");
+    if (!existsSync(legacyPath)) return "";
+    const legacy = JSON.parse(readFileSync(legacyPath, "utf8")) as { pat?: unknown };
+    return typeof legacy.pat === "string" ? legacy.pat.trim() : "";
+  } catch {
+    // 读不到遗留文件就当没有，bridge 启动时还会再警告
+    return "";
+  }
+}
+
+/**
+ * 第一步 load：只做读取+解析（JSONC 解析、legacy bridges/qoder-cn.json 回退读取）。
+ * 不 exit、不写盘；缺失处理与写回由最外层 loadConfig 负责。
+ */
+function loadRawConfig(configPath: string): RawConfigLoad {
+  const rawText = readFileSync(configPath, "utf8");
+  return {
+    rawText,
+    file: parseJsonc<Partial<All2ApiConfig>>(rawText),
+    legacyQoderCnPat: readLegacyQoderCnPat(),
+  };
+}
+
+/** models 表规整：非数组/全空（trim 后无有效字符串）回落各渠道默认表；返回全新数组。 */
+function normalizeModels(raw: unknown, fallback: readonly string[]): string[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  const cleaned = raw
+    .filter((m): m is string => typeof m === "string")
+    .map((m) => m.trim())
+    .filter((m) => m !== "");
+  return cleaned.length > 0 ? cleaned : [...fallback];
+}
+
+/** codebuddy 系 region 归一：显式 cn/intl/auto 保留，其余（缺失/空/非法）回槽位缺省。 */
+function resolveCodeBuddyRegion(raw: unknown, slotDefault: "cn" | "intl"): "auto" | "cn" | "intl" {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  return v === "cn" || v === "intl" || v === "auto" ? v : slotDefault;
+}
+
+/** trae 系 dataDir 归一结论：dataDir || authDir（dataDir 优先，取 trim 后首个非空，缺省 ""）。 */
+function resolveTraeDataDir(file: TraeProviderConfig | undefined): string {
+  return file?.dataDir?.trim() || file?.authDir?.trim() || "";
+}
+
+/**
+ * 第二步 resolve：纯函数——env 覆盖应用 + 默认值合并 + models 表规整 +
+ * codebuddy region 缺省 + trae dataDir||authDir 归一。不读盘、不写盘、不 exit。
+ */
+export function resolveConfig(
+  fileConfig: Partial<All2ApiConfig>,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedAll2ApiConfig {
+  const fileProviders = fileConfig.providers;
+  return {
+    host: env["ALL2API_HOST"] ?? fileConfig.host ?? DEFAULTS.host,
+    port: Number(env["ALL2API_PORT"] ?? fileConfig.port ?? DEFAULTS.port),
+    apiKey: env["ALL2API_API_KEY"] ?? fileConfig.apiKey ?? DEFAULTS.apiKey,
+    defaultProvider: fileConfig.defaultProvider ?? DEFAULTS.defaultProvider,
+    upstreamTimeoutMs: fileConfig.upstreamTimeoutMs ?? DEFAULTS.upstreamTimeoutMs,
+    // strictModels 开关归一化（缺省 false=透传任意模型名，保旧配置兼容）。
+    strictModels: fileConfig.strictModels === true,
     providers: {
-      zcode: { ...DEFAULTS.providers.zcode, ...fileConfig.providers?.zcode },
-      qoder: { ...DEFAULTS.providers.qoder, ...fileConfig.providers?.qoder },
-      qoderIntl: { ...DEFAULTS.providers.qoderIntl, ...fileConfig.providers?.qoderIntl },
-      codebuddy: { ...DEFAULTS.providers.codebuddy, ...fileConfig.providers?.codebuddy },
-      codebuddyIntl: { ...DEFAULTS.providers.codebuddyIntl, ...fileConfig.providers?.codebuddyIntl },
-      trae: { ...DEFAULTS.providers.trae, ...fileConfig.providers?.trae },
-      "trae-cn": { ...DEFAULTS.providers["trae-cn"], ...fileConfig.providers?.["trae-cn"] },
+      zcode: {
+        ...DEFAULTS.providers.zcode,
+        ...fileProviders?.zcode,
+        models: normalizeModels(fileProviders?.zcode?.models, DEFAULTS.providers.zcode.models),
+      },
+      qoder: {
+        ...DEFAULTS.providers.qoder,
+        ...fileProviders?.qoder,
+        models: normalizeModels(fileProviders?.qoder?.models, DEFAULTS.providers.qoder.models),
+      },
+      qoderIntl: {
+        ...DEFAULTS.providers.qoderIntl,
+        ...fileProviders?.qoderIntl,
+        models: normalizeModels(fileProviders?.qoderIntl?.models, DEFAULTS.providers.qoderIntl.models),
+      },
+      codebuddy: {
+        ...DEFAULTS.providers.codebuddy,
+        ...fileProviders?.codebuddy,
+        region: resolveCodeBuddyRegion(fileProviders?.codebuddy?.region, "cn"),
+        models: normalizeModels(fileProviders?.codebuddy?.models, DEFAULTS.providers.codebuddy.models),
+      },
+      codebuddyIntl: {
+        ...DEFAULTS.providers.codebuddyIntl,
+        ...fileProviders?.codebuddyIntl,
+        region: resolveCodeBuddyRegion(fileProviders?.codebuddyIntl?.region, "intl"),
+        models: normalizeModels(fileProviders?.codebuddyIntl?.models, DEFAULTS.providers.codebuddyIntl.models),
+      },
+      trae: {
+        ...DEFAULTS.providers.trae,
+        ...fileProviders?.trae,
+        dataDir: resolveTraeDataDir(fileProviders?.trae),
+        models: normalizeModels(fileProviders?.trae?.models, DEFAULTS.providers.trae.models),
+      },
+      "trae-cn": {
+        ...DEFAULTS.providers["trae-cn"],
+        ...fileProviders?.["trae-cn"],
+        dataDir: resolveTraeDataDir(fileProviders?.["trae-cn"]),
+        models: normalizeModels(fileProviders?.["trae-cn"]?.models, DEFAULTS.providers["trae-cn"].models),
+      },
     },
   };
-  cfg.host = process.env.ALL2API_HOST ?? cfg.host;
-  cfg.port = Number(process.env.ALL2API_PORT ?? cfg.port);
-  cfg.apiKey = process.env.ALL2API_API_KEY ?? cfg.apiKey;
-  // strictModels 开关归一化（缺省 false=透传任意模型名，保旧配置兼容）。
-  cfg.strictModels = fileConfig.strictModels === true;
-  if (!cfg.apiKey?.trim() || cfg.apiKey.trim() === "sk-all2api-change-me") {
-    const generated = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
-    const next = persistApiKeyPreservingComments(raw, generated);
-    writeFileSync(configPath, next.endsWith("\n") ? next : next + "\n");
-    console.log(`[config] apiKey missing or placeholder — generated a new one and wrote it to ${configPath}`);
-    cfg.apiKey = generated;
+}
+
+/**
+ * 第三步 persist：纯函数——apiKey 缺失/占位时生成新 key 并算出回写文本，
+ * 不碰磁盘；是否写盘由最外层 loadConfig 决定。
+ */
+function persistApiKey(rawText: string, apiKey: string): { apiKey: string; nextText: string | null } {
+  if (apiKey.trim() && apiKey.trim() !== "sk-all2api-change-me") return { apiKey, nextText: null };
+  const generated = `sk-all2api-${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+  return { apiKey: generated, nextText: persistApiKeyPreservingComments(rawText, generated) };
+}
+
+/**
+ * 最外层入口：编排 load → resolve → persist，并承担全部副作用——
+ * 本函数是 config 模块唯一调用 process.exit 与 writeFileSync 的地方。
+ */
+export function loadConfig(): ResolvedAll2ApiConfig {
+  const found = findConfigPath();
+  if (!found) {
+    console.error("[config] config.jsonc not found — cp config.example.jsonc config.jsonc then edit apiKey/providers");
+    process.exit(1);
+  }
+  if (found.isLegacy) {
+    console.warn("[config] using legacy config.json — cp config.json config.jsonc to migrate");
+  }
+  // load：读取+解析（含 JSONC、legacy bridges/qoder-cn.json 回退）。
+  const loaded = loadRawConfig(found.path);
+  // resolve：env 覆盖、默认值与 models 表规整（region 缺省、dataDir||authDir 归一）。
+  const cfg = resolveConfig(loaded.file);
+  // persist：apiKey 自动生成回写（磁盘写只在这里）。
+  const persisted = persistApiKey(loaded.rawText, cfg.apiKey);
+  if (persisted.nextText !== null) {
+    const next = persisted.nextText;
+    writeFileSync(found.path, next.endsWith("\n") ? next : next + "\n");
+    console.log(`[config] apiKey missing or placeholder — generated a new one and wrote it to ${found.path}`);
+    cfg.apiKey = persisted.apiKey;
   }
   // qoder 配置体验校验（只 warn、不 throw，旧 config.jsonc（或 legacy config.json）形状缺字段时也能跑但要提示清楚）。
   if (cfg.providers.qoder.enabled) {
     const filePat = cfg.providers.qoder.pat?.trim() ?? "";
-    let legacyPat = "";
-    try {
-      const legacyPath = join(appRoot(), "bridges", "qoder-cn.json");
-      if (existsSync(legacyPath)) {
-        const legacy = JSON.parse(readFileSync(legacyPath, "utf8")) as { pat?: unknown };
-        if (typeof legacy.pat === "string") legacyPat = legacy.pat.trim();
-      }
-    } catch {
-      // 读不到遗留文件就当没有，bridge 启动时还会再警告
-    }
-    if (!filePat && !legacyPat && !readQoderCnIdeIdentity()) {
+    if (!filePat && !loaded.legacyQoderCnPat && !readQoderCnIdeIdentity()) {
       warnNoCredential("cn", cfg.providers.qoder.bridgePort);
     }
   }
