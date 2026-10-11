@@ -8,7 +8,12 @@ import { resolvePythonBin } from "../../python.js";
 import type { CodeBuddyAuth, CodeBuddyRegion } from "./credentials.js";
 
 /**
- * CodeBuddy CN（VSCode 系）桌面端 vscdb 凭据源（只读）。
+ * CodeBuddy CN（VSCode 系）桌面端 vscdb 凭据源（只读；Credentials 的私有适配器）。
+ *
+ * 归属：src 内仅 credentials.ts 引用本模块（index.ts 经 credentials 再导出，
+ * 不直引）。对外窄接口仍为 CodeBuddyCredentials.get/headers/refresh；
+ * 本模块只负责“定位 → 取口令 → 读库 → 解密 → 映射”，region 钉选由调用方
+ * 经 opts.region + applyRegion 完成。
  *
  * 实测参数（CodeBuddy CN 4.12.0，本机验证通过）：
  * - state.vscdb 的 ItemTable 中 `planning-genie.new.accessTokencn` 的值为
@@ -55,9 +60,17 @@ export interface VscdbSourceOptions {
   region?: CodeBuddyRegion;
 }
 
-/** 未显式指定 key 时的候选顺序（cn/auto：CN 优先；intl：海外 accessToken 优先）。 */
+/** 未显式指定 key 时的候选顺序表（cn/auto：CN 优先保回归；intl：海外 accessToken 优先）。 */
+const VSCDB_KEY_ORDER: Record<string, readonly string[]> = {
+  cn: VSCDB_KEY_CANDIDATES,
+  auto: VSCDB_KEY_CANDIDATES,
+  intl: [VSCDB_KEY_INTL, DEFAULT_VSCDB_KEY],
+};
+
+/** 未显式指定 key 时的候选顺序（cn/auto：CN 优先；intl：海外 accessToken 优先；非法/缺省按 auto）。 */
 export function vscdbKeyCandidates(region?: CodeBuddyRegion): string[] {
-  return region === "intl" ? [VSCDB_KEY_INTL, DEFAULT_VSCDB_KEY] : [...VSCDB_KEY_CANDIDATES];
+  const key = region === "intl" ? "intl" : region === "cn" ? "cn" : "auto";
+  return [...VSCDB_KEY_ORDER[key]!];
 }
 
 /** 平台惯例 vscdb 路径（Linux 实测；Win/mac 未实机确认）。 */

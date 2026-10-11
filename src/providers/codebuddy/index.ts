@@ -7,6 +7,6 @@ export {
   isGlobalDomain,
   normalizeDomainForRegion,
   normalizeRegion,
+  vscdbKeyCandidates,
 } from "./credentials.js";
 export type { CodeBuddyRegion } from "./credentials.js";
-export { vscdbKeyCandidates } from "./vscdb.js";

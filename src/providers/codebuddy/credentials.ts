@@ -6,6 +6,10 @@ import { basename, delimiter, join } from "node:path";
 
 import { readVscdbAuth, type VscdbSourceOptions } from "./vscdb.js";
 
+// vscdb 为 Credentials 的私有适配器：src 内仅本模块引用 "./vscdb.js"。
+// 对外需要的 vscdbKeyCandidates 经本模块统一再导出（index.ts 只从 credentials 转出，不直引 vscdb）。
+export { vscdbKeyCandidates } from "./vscdb.js";
+
 /**
  * CodeBuddy / WorkBuddy（腾讯）桌面端凭据处理。
  *
@@ -77,29 +81,96 @@ export function normalizeDomainForRegion(region: CodeBuddyRegion, domain?: strin
   return d;
 }
 
+// ---------- region 矩阵（数据表驱动；cn/auto 同发现序，intl 海外优先） ----------
+
+/**
+ * 发现维度 profile（Electron 二进制序 × auth 目录序）。
+ * cn 与 auto 共用同一份表对象（发现序一致；base 回落差异另见 REGION_FALLBACK_BASE），
+ * intl 独占海外优先表。新增平台/路径时只加表行，不加 region 分支。
+ */
+interface RegionDiscoveryProfile {
+  /** Windows 注册表 + 默认安装位的应用序。 */
+  electronApps: readonly string[];
+  /** Linux PATH 扫描名序。 */
+  pathNames: readonly string[];
+  /** /opt 目录扫描二进制名序。 */
+  optBinaries: readonly string[];
+  /** /usr/share 目录扫描二进制名序。 */
+  shareBinaries: readonly string[];
+  /** /opt 无版本号兜底目录序。 */
+  optFallbackDirs: readonly string[];
+  /** Linux 固定块序：true=codebuddy 块在前，false=workbuddy 块在前。 */
+  codebuddyBlockFirst: boolean;
+  /** Linux buddycn 真实路径位置：true=置前(head)，false=沉底(tail)。 */
+  cnHeadFirst: boolean;
+  /** macOS .app 名序（映射为 /Applications/<app>.app/Contents/MacOS/Electron）。 */
+  darwinApps: readonly string[];
+  /** auth 扩展目录名序（Win/Linux 共用）。 */
+  authAppDirs: readonly string[];
+}
+
+const STANDARD_DISCOVERY: RegionDiscoveryProfile = {
+  electronApps: ["WorkBuddy", "CodeBuddy", "WorkBuddy AI"],
+  pathNames: ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy", "buddycn", "buddycn-desktop"],
+  optBinaries: ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy", "electron", "Electron"],
+  shareBinaries: ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy"],
+  optFallbackDirs: ["CodeBuddy", "WorkBuddy"],
+  codebuddyBlockFirst: true,
+  cnHeadFirst: true,
+  darwinApps: ["WorkBuddy", "WorkBuddy AI", "CodeBuddy CN"],
+  authAppDirs: ["CodeBuddyExtension", "WorkBuddyExtension"],
+};
+
+const INTL_DISCOVERY: RegionDiscoveryProfile = {
+  electronApps: ["WorkBuddy AI", "WorkBuddy", "CodeBuddy"],
+  pathNames: ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy", "buddycn", "buddycn-desktop"],
+  optBinaries: ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy", "electron", "Electron"],
+  shareBinaries: ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy"],
+  optFallbackDirs: ["WorkBuddy", "CodeBuddy"],
+  codebuddyBlockFirst: false,
+  cnHeadFirst: false,
+  darwinApps: ["WorkBuddy AI", "WorkBuddy", "CodeBuddy CN"],
+  authAppDirs: ["WorkBuddyExtension", "CodeBuddyExtension"],
+};
+
+const REGION_DISCOVERY: Record<CodeBuddyRegion, RegionDiscoveryProfile> = {
+  cn: STANDARD_DISCOVERY,
+  auto: STANDARD_DISCOVERY,
+  intl: INTL_DISCOVERY,
+};
+
+/** 发现维度 profile（cn/auto 同表，intl 海外优先）。 */
+function discoveryProfileFor(region?: CodeBuddyRegion): RegionDiscoveryProfile {
+  return REGION_DISCOVERY[normalizeRegion(region)];
+}
+
+/** pickBase 回落 base（global 未命中时按此表回落；cn 钉死项仅作表值，实际由 pickBase 首行短路）。 */
+const REGION_FALLBACK_BASE: Record<CodeBuddyRegion, string> = {
+  cn: CN_BACKEND,
+  auto: CN_BACKEND,
+  intl: GLOBAL_WORKBUDDY_BASE,
+};
+
+/** global domain 路由（workbuddy.ai / codebuddy.ai），未命中返回 undefined 由回落表决定。 */
+function resolveGlobalBase(lowerDomain: string): string | undefined {
+  if (lowerDomain.includes("workbuddy.ai")) return GLOBAL_WORKBUDDY_BASE;
+  if (lowerDomain.includes("codebuddy.ai")) return GLOBAL_CODEBUDDY_BASE;
+  return undefined;
+}
+
 /**
  * 按 auth.domain 选择后端 base（大小写不敏感）：
  * - 含 workbuddy.ai → https://www.workbuddy.ai
  * - 含 codebuddy.ai（且无 workbuddy 串）→ https://www.codebuddy.ai
- * - 否则（含 www.codebuddy.cn / 空）→ https://copilot.tencent.com（CN 默认不变）
+ * - 否则（含 www.codebuddy.cn / 空）→ 按 region 回落表（cn/auto → CN，intl → Global workbuddy）
  *
- * region 钉死：cn → 强制 CN_BACKEND；intl → 强制 Global（global domain 按原规则
- * 区分 workbuddy.ai / codebuddy.ai，空 domain 默认 GLOBAL_WORKBUDDY_BASE）；
+ * region 钉死：cn → 强制 CN_BACKEND；intl/auto 按上表路由；
  * auto 保持现有 pickBase 行为。错域由 assertDomainForRegion 抛错（调用方在 get 后校验）。
  */
 export function pickBase(domain?: string, region?: CodeBuddyRegion): string {
   const r = normalizeRegion(region);
   if (r === "cn") return CN_BACKEND;
-  if (r === "intl") {
-    const d = (domain ?? "").toLowerCase();
-    if (d.includes("workbuddy.ai")) return GLOBAL_WORKBUDDY_BASE;
-    if (d.includes("codebuddy.ai")) return GLOBAL_CODEBUDDY_BASE;
-    return GLOBAL_WORKBUDDY_BASE;
-  }
-  const d = (domain ?? "").toLowerCase();
-  if (d.includes("workbuddy.ai")) return GLOBAL_WORKBUDDY_BASE;
-  if (d.includes("codebuddy.ai")) return GLOBAL_CODEBUDDY_BASE;
-  return CN_BACKEND;
+  return resolveGlobalBase((domain ?? "").toLowerCase()) ?? REGION_FALLBACK_BASE[r];
 }
 
 /** chat / refresh / billing 全由 pickBase 派生（路径 CN/intl 一致；region 缺省 auto 保兼容）。 */
@@ -242,35 +313,33 @@ export function buildKeyHelperScript(extraBindingFirst?: string): string {
   );
 }
 
-/** Windows 注册表卸载项中按序查找 WorkBuddy / CodeBuddy 的安装路径（双 App 都要探测）。 */
+/** Windows 注册表 DisplayIcon 正则（key 为应用名，与 REGION_DISCOVERY.electronApps 对齐）。 */
+const ELECTRON_APP_EXE_RE: Record<string, RegExp> = {
+  WorkBuddy: /workbuddy\.exe/i,
+  CodeBuddy: /codebuddy\.exe/i,
+  "WorkBuddy AI": /workbuddy ai\.exe/i,
+};
+
+/** Windows 注册表卸载项中按序查找 WorkBuddy / CodeBuddy 的安装路径（双 App 都要探测；顺序由 region 矩阵表驱动）。 */
 async function electronFromWindowsRegistry(region?: CodeBuddyRegion): Promise<string[]> {
   if (process.platform !== "win32") return [];
   const found: string[] = [];
-  // cn/auto：WorkBuddy 在前（保留原有优先顺序），CodeBuddy 随后，WorkBuddy AI（海外版）最后；
-  // intl：海外版 WorkBuddy AI 优先，其次 WorkBuddy，最后 CodeBuddy；任一命中即后续按序取用
-  const cnApps: Array<{ query: string; exeRe: RegExp }> = [
-    { query: "WorkBuddy", exeRe: /workbuddy\.exe/i },
-    { query: "CodeBuddy", exeRe: /codebuddy\.exe/i },
-    { query: "WorkBuddy AI", exeRe: /workbuddy ai\.exe/i },
-  ];
-  const intlApps: Array<{ query: string; exeRe: RegExp }> = [
-    { query: "WorkBuddy AI", exeRe: /workbuddy ai\.exe/i },
-    { query: "WorkBuddy", exeRe: /workbuddy\.exe/i },
-    { query: "CodeBuddy", exeRe: /codebuddy\.exe/i },
-  ];
-  const apps = normalizeRegion(region) === "intl" ? intlApps : cnApps;
-  for (const app of apps) {
+  // 顺序即 discoveryProfileFor(region).electronApps：
+  // cn/auto 为 [WorkBuddy, CodeBuddy, WorkBuddy AI]，intl 为 [WorkBuddy AI, WorkBuddy, CodeBuddy]。
+  const apps = discoveryProfileFor(region).electronApps;
+  for (const query of apps) {
+    const exeRe = ELECTRON_APP_EXE_RE[query] ?? /workbuddy\.exe/i;
     for (const hive of ["HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"]) {
       try {
         const stdout = await new Promise<string>((resolve, reject) => {
-          execFile("reg", ["query", hive, "/s", "/f", app.query], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) =>
+          execFile("reg", ["query", hive, "/s", "/f", query], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) =>
             err ? reject(err) : resolve(out),
           );
         });
         const iconLine = stdout
           .split("\n")
           .map((l) => l.trim())
-          .find((l) => l.startsWith("DisplayIcon") && app.exeRe.test(l));
+          .find((l) => l.startsWith("DisplayIcon") && exeRe.test(l));
         if (!iconLine) continue;
         const value = iconLine.split("REG_SZ")[1]?.trim() ?? "";
         const exe = value.split(",")[0]?.trim();
@@ -283,19 +352,15 @@ async function electronFromWindowsRegistry(region?: CodeBuddyRegion): Promise<st
   return found;
 }
 
-/** Windows 双 App Electron 二进制默认安装位（cn/auto：WorkBuddy 在前以保留原优先顺序；intl：海外版 WorkBuddy AI 优先）。 */
+/** Windows 双 App Electron 二进制默认安装位（顺序由 region 矩阵表驱动）。 */
 export function windowsElectronDefaults(region?: CodeBuddyRegion): string[] {
   const programFiles = [
     process.env["ProgramFiles"] ?? "C:\\Program Files",
     process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
   ];
   const localAppData = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
-  // 应用维度优先序：cn/auto 为 [WorkBuddy, CodeBuddy, WorkBuddy AI]（现有顺序不变）；
-  // intl 为 [WorkBuddy AI, WorkBuddy, CodeBuddy]（海外优先）。
-  const apps =
-    normalizeRegion(region) === "intl"
-      ? (["WorkBuddy AI", "WorkBuddy", "CodeBuddy"] as const)
-      : (["WorkBuddy", "CodeBuddy", "WorkBuddy AI"] as const);
+  // 应用维度优先序由 REGION_DISCOVERY 驱动（cn/auto 保持现有 CN 优先，intl 海外优先）。
+  const apps = discoveryProfileFor(region).electronApps;
   const exeName = (app: string): string => (app === "WorkBuddy AI" ? "WorkBuddy AI.exe" : `${app}.exe`);
   const out: string[] = [];
   for (const app of apps) {
@@ -313,7 +378,7 @@ export function windowsElectronDefaults(region?: CodeBuddyRegion): string[] {
 }
 
 /** Linux 下 PATH 扫描（等价于 `which <name>`，不额外拉起进程）。 */
-function pathLookup(names: string[]): string[] {
+function pathLookup(names: readonly string[]): string[] {
   const out: string[] = [];
   const dirs = (process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin").split(delimiter);
   for (const name of names) {
@@ -327,7 +392,7 @@ function pathLookup(names: string[]): string[] {
   return out;
 }
 
-/** 扫描 /opt 下 CodeBuddy/WorkBuddy/buddy 前缀目录里的可执行候选。 */
+/** 扫描 /opt 下 CodeBuddy/WorkBuddy/buddy 前缀目录里的可执行候选（顺序由 region 矩阵表驱动）。 */
 function optDirCandidates(region?: CodeBuddyRegion): string[] {
   const out: string[] = [];
   let entries: string[] = [];
@@ -336,29 +401,20 @@ function optDirCandidates(region?: CodeBuddyRegion): string[] {
   } catch {
     return out;
   }
-  // cn/auto：codebuddy 系在前（现有顺序不变）；intl：workbuddy 系在前（海外优先）。
-  const binaries =
-    normalizeRegion(region) === "intl"
-      ? ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy", "electron", "Electron"]
-      : ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy", "electron", "Electron"];
+  const profile = discoveryProfileFor(region);
+  const binaries = profile.optBinaries;
   for (const entry of entries) {
     if (!/^(codebuddy|workbuddy|buddy)/i.test(entry)) continue;
     for (const bin of binaries) out.push(join("/opt", entry, bin));
   }
-  // 无版本号的常规安装位（/opt 下无匹配时的兜底）
+  // 无版本号的常规安装位（/opt 下无匹配时的兜底；目录序由 region 矩阵表驱动）
   for (const bin of binaries) {
-    if (normalizeRegion(region) === "intl") {
-      out.push(join("/opt", "WorkBuddy", bin));
-      out.push(join("/opt", "CodeBuddy", bin));
-    } else {
-      out.push(join("/opt", "CodeBuddy", bin));
-      out.push(join("/opt", "WorkBuddy", bin));
-    }
+    for (const dir of profile.optFallbackDirs) out.push(join("/opt", dir, bin));
   }
   return out;
 }
 
-/** /usr/share 下 codebuddy/workbuddy/buddy 数据目录里的可执行候选。 */
+/** /usr/share 下 codebuddy/workbuddy/buddy 数据目录里的可执行候选（顺序由 region 矩阵表驱动）。 */
 function usrShareCandidates(region?: CodeBuddyRegion): string[] {
   const out: string[] = [];
   let entries: string[] = [];
@@ -367,10 +423,7 @@ function usrShareCandidates(region?: CodeBuddyRegion): string[] {
   } catch {
     return out;
   }
-  const binaries =
-    normalizeRegion(region) === "intl"
-      ? ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy"]
-      : ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy"];
+  const binaries = discoveryProfileFor(region).shareBinaries;
   for (const entry of entries) {
     if (!/^(codebuddy|workbuddy|buddy)/i.test(entry)) continue;
     for (const bin of binaries) out.push(join("/usr/share", entry, bin));
@@ -418,19 +471,17 @@ function desktopExecCandidates(): string[] {
   return out;
 }
 
-/** Linux 版 Electron 二进制候选（尽力探测；找不到由调用方抛原错）。 */
+/** Linux 版 Electron 二进制候选（尽力探测；找不到由调用方抛原错；顺序由 region 矩阵表驱动）。 */
 export function linuxElectronCandidates(region?: CodeBuddyRegion): string[] {
-  const intl = normalizeRegion(region) === "intl";
-  const pathNames = intl
-    ? ["workbuddy", "WorkBuddy", "codebuddy", "CodeBuddy", "buddycn", "buddycn-desktop"]
-    : ["codebuddy", "CodeBuddy", "workbuddy", "WorkBuddy", "buddycn", "buddycn-desktop"];
-  // cn/auto：buddycn 真实路径置前（现有顺序不变，保 CN 回归）；
-  // intl：海外优先，buddycn 沉底（仍保留为兜底，不删）。
+  const profile = discoveryProfileFor(region);
+  const pathNames = profile.pathNames;
+  // buddycn 真实路径位置由表驱动：cn/auto 置前（保 CN 回归，命中 canonical 路径），intl 沉底兜底。
   const cnHead = ["/usr/share/buddycn/bin/buddycn", "/usr/share/buddycn/bin/buddycn-desktop"];
-  const head = intl ? [] : cnHead;
-  const tail = intl ? cnHead : [];
+  const head = profile.cnHeadFirst ? cnHead : [];
+  const tail = profile.cnHeadFirst ? [] : cnHead;
   const codebuddyBlock = ["/usr/bin/codebuddy", "/usr/local/bin/codebuddy", "/snap/bin/codebuddy", join(homedir(), ".local", "bin", "codebuddy")];
   const workbuddyBlock = ["/usr/bin/workbuddy", "/usr/local/bin/workbuddy", "/snap/bin/workbuddy", join(homedir(), ".local", "bin", "workbuddy")];
+  const orderedBlocks = profile.codebuddyBlockFirst ? [codebuddyBlock, workbuddyBlock] : [workbuddyBlock, codebuddyBlock];
   return [
     // 本机实测（dpkg codebuddy-cn 4.12.0）：真实二进制位于此；/usr/bin/buddycn
     // 仅为指向它的符号链接，故 cn/auto 下显式真实路径置前，确保命中 canonical 路径
@@ -439,8 +490,8 @@ export function linuxElectronCandidates(region?: CodeBuddyRegion): string[] {
     ...optDirCandidates(region),
     ...usrShareCandidates(region),
     ...desktopExecCandidates(),
-    ...(intl ? workbuddyBlock : codebuddyBlock),
-    ...(intl ? codebuddyBlock : workbuddyBlock),
+    ...orderedBlocks[0]!,
+    ...orderedBlocks[1]!,
     ...tail,
   ];
 }
@@ -472,17 +523,7 @@ export async function listElectronBinaries(configured?: string, region?: CodeBud
     process.platform === "linux"
       ? [...linuxElectronCandidates(region)]
       : process.platform === "darwin"
-        ? normalizeRegion(region) === "intl"
-          ? [
-              "/Applications/WorkBuddy AI.app/Contents/MacOS/Electron",
-              "/Applications/WorkBuddy.app/Contents/MacOS/Electron",
-              "/Applications/CodeBuddy CN.app/Contents/MacOS/Electron",
-            ]
-          : [
-              "/Applications/WorkBuddy.app/Contents/MacOS/Electron",
-              "/Applications/WorkBuddy AI.app/Contents/MacOS/Electron",
-              "/Applications/CodeBuddy CN.app/Contents/MacOS/Electron",
-            ]
+        ? discoveryProfileFor(region).darwinApps.map((app) => `/Applications/${app}.app/Contents/MacOS/Electron`)
         : [...windowsElectronDefaults(region), ...(await electronFromWindowsRegistry(region))];
   const out = [...new Set(ordered.filter((p) => p && existsSync(p)))];
   if (out.length === 0) {
@@ -629,6 +670,13 @@ export interface CodeBuddyAuth {
 }
 
 export class CodeBuddyCredentials {
+  // ===== internal seams（Credentials 拥有全部策略；对外仅 get/headers/refresh 窄接口） =====
+  // - RegionSeam: normalizeRegion + REGION_DISCOVERY + REGION_FALLBACK_BASE + applyRegion（钉死校验）
+  // - ElectronDiscoverySeam: electronPinnedPath / listElectronBinaries（表驱动）/ listBinaries（实例 funnel）
+  // - InfoPairingSeam: explicitAuthFiles / autoAuthDirs（表驱动）/ listAuthFiles / getFromInfoPairs
+  //   （tried-loop + mtime cache + key-rotation retry 语义不变）
+  // - VscdbAdapterSeam: vscdbOptions + readVscdbViaAdapter（唯一触达 readVscdbAuth 的内部 funnel；
+  //   vscdb 只读不写，refresh=内存重读；get/doRefresh 均经此 funnel，缓存语义不变）
   private readonly keyProvider: AtRestKeyProvider;
   private infoStates = new Map<string, { doc: Record<string, unknown>; mtime: number; auth: CodeBuddyAuth | undefined; key: AtRestKey | undefined }>();
   private vscdbCached: CodeBuddyAuth | null = null;
@@ -684,6 +732,17 @@ export class CodeBuddyCredentials {
     };
   }
 
+  /**
+   * seam: vscdb 私有适配器 funnel（本类唯一触达 readVscdbAuth 的位置）。
+   * 读库 → region 归一/钉死 → 缓存(lastSource/vscdbCached)；只读不写语义不变。
+   */
+  private async readVscdbViaAdapter(): Promise<CodeBuddyAuth> {
+    const auth = this.applyRegion(await readVscdbAuth(this.vscdbOptions()));
+    this.vscdbCached = auth;
+    this.lastSource = "vscdb";
+    return auth;
+  }
+
   /** auth 维度 .info 侧是否被钉（显式位置任一非空即独占，不掉自动探测）。 */
   private isAuthInfoPinned(): boolean {
     return !!(this.authDir?.trim() || process.env["WORKBUDDY_AUTH_FILE"]?.trim());
@@ -727,27 +786,24 @@ export class CodeBuddyCredentials {
     return files.length > 0 ? files[0] : undefined;
   }
 
-  /** 各平台自动探测的 auth 目录优先序（cn/auto：CodeBuddy→WorkBuddy；intl：WorkBuddy→CodeBuddy，海外优先）。 */
+  /** 各平台自动探测的 auth 目录优先序（顺序由 region 矩阵表驱动）。 */
   private autoAuthDirs(): string[] {
-    const intl = this.region === "intl";
+    const appDirs = discoveryProfileFor(this.region).authAppDirs;
     if (process.platform === "darwin") {
       return [join(homedir(), "Library", "Application Support", "CodeBuddyExtension", "Data", "Public", "auth")];
     }
     if (process.platform === "win32") {
-      // Windows 双 App auth 目录都要探测（cn/auto：CodeBuddy 在前以保留原优先顺序；intl：WorkBuddy 在前）
+      // Windows 双 App auth 目录都要探测（顺序即 authAppDirs）。
       const localAppData = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
-      const codebuddy = join(localAppData, "CodeBuddyExtension", "Data", "Public", "auth");
-      const workbuddy = join(localAppData, "WorkBuddyExtension", "Data", "Public", "auth");
-      return intl ? [workbuddy, codebuddy] : [codebuddy, workbuddy];
+      return appDirs.map((appDir) => join(localAppData, appDir, "Data", "Public", "auth"));
     }
-    // Linux：双 App × 双 XDG 基址，同基址下 cn/auto 为 CodeBuddy 在前，intl 为 WorkBuddy 在前
+    // Linux：双 App × 双 XDG 基址，同基址下顺序即 authAppDirs
     const bases = [
       process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share"),
       join(homedir(), ".local", "share"),
       process.env["XDG_CONFIG_HOME"] ?? join(homedir(), ".config"),
       join(homedir(), ".config"),
     ];
-    const appDirs = intl ? ["WorkBuddyExtension", "CodeBuddyExtension"] : ["CodeBuddyExtension", "WorkBuddyExtension"];
     const candidates: string[] = [];
     for (const base of bases) {
       for (const appDir of appDirs) {
@@ -801,11 +857,8 @@ export class CodeBuddyCredentials {
       return this.getFromInfoPairs();
     }
     if (!authPinned && vscdbPinned) {
-      // vscdb 被钉：跳过 .info 探测
-      const auth = this.applyRegion(await readVscdbAuth(this.vscdbOptions()));
-      this.vscdbCached = auth;
-      this.lastSource = "vscdb";
-      return auth;
+      // vscdb 被钉：跳过 .info 探测（经私有适配器 funnel，语义不变）
+      return this.readVscdbViaAdapter();
     }
     try {
       return await this.getFromInfoPairs();
@@ -820,10 +873,7 @@ export class CodeBuddyCredentials {
       return this.vscdbCached;
     }
     try {
-      const auth = this.applyRegion(await readVscdbAuth(this.vscdbOptions()));
-      this.vscdbCached = auth;
-      this.lastSource = "vscdb";
-      return auth;
+      return await this.readVscdbViaAdapter();
     } catch (vscdbError) {
       // region 错域优先透出（比通用耗尽报错更具指导性）；其余才合并 info/vscdb 双错。
       if (this.region !== "auto" && vscdbError instanceof Error && vscdbError.message.includes("codebuddy")) {
@@ -1041,8 +1091,8 @@ export class CodeBuddyCredentials {
   private async doRefresh(): Promise<void> {
     const creds = await this.get();
     if (this.lastSource === "vscdb") {
-      // v1：vscdb 只读不写（IDE 可能持锁），refresh = 内存重读
-      this.vscdbCached = this.applyRegion(await readVscdbAuth(this.vscdbOptions()));
+      // v1：vscdb 只读不写（IDE 可能持锁），refresh = 内存重读（经私有适配器 funnel）
+      await this.readVscdbViaAdapter();
       return;
     }
     if (!creds.refreshToken) throw new Error("no refresh token available — log in to the desktop app again");
