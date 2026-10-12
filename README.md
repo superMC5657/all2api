@@ -40,7 +40,7 @@ JWT 优先级：`config.jsonc` 的 `providers.zcode.jwt`（显式，非空即优
 
 deviceFile 一号一台：按 JWT sub 区分设备指纹并持久化，默认 `~/.zcode/v2/all2api-device.json`（`providers.zcode.deviceFile` 可覆盖，支持 `~` 前缀）；多账号各用各的指纹，不要混用同一个文件。
 
-appVersion 自动探测：`config.jsonc` 的 `providers.zcode.appVersion` 显式值 ＞ `ZCODE_APP_VERSION` 环境变量 ＞ 注册表 ＞ exe ＞ runtime 探测 ＞ 回落（当前桌面端 3.14.3）。上报为 `User-Agent: ZCode/<ver>` 与 `X-ZCode-App-Version` 头。
+appVersion 自动探测：`config.jsonc` 的 `providers.zcode.appVersion` 显式值 ＞ `ZCODE_APP_VERSION` 环境变量 ＞ 注册表 ＞ exe ＞ runtime 探测 ＞ 回落（当前桌面端 3.14.4）。上报为 `User-Agent: ZCode/<ver>` 与 `X-ZCode-App-Version` 头。
 
 先校验再接入：
 
@@ -55,7 +55,16 @@ pnpm decrypt:zcode   # 解密本机 credentials.json，只打印脱敏摘要（�
 上游用阿里云验证码 + 风控码，两类失败要区分：
 
 - `3007`＝验证码挑战（HTTP 400/403 + body `{"code":3007}`）：换 verify param 最多重试 3 次，属正常路径。
-- `3012`＝风控「unusual activity」（HTTP 405 承载）：账号/设备被限，直接抛 DISABLED，不要重试刷。
+- `3012`＝风控「unusual activity」（HTTP 405 承载）：按 JWT sub 记 strikes＋指数冷却＋7 天衰减——`strikes>=4` 才抛 DISABLED，否则抛 429 COOLING（冷却秒数见错误信息文本）；messages 成功一次即清零。不要拿到 3012 就无脑重试刷。
+
+### 风控指纹自动轮换（zcode，默认开）
+
+3012 将判 DISABLED 且开关开时，先给该 JWT sub 换一份全新设备指纹（新 SKU＋新 UUID `deviceMid`＋落盘到 `deviceFile`）并打 warn 日志，然后仍抛 DISABLED（本次请求不重试）。冷却中的 3012（未达门限）不轮换。
+
+- 开关：`config.jsonc` 的 `providers.zcode.riskAutoRotate`（默认 `true`，显式 `false` 关）或环境变量 `ZCODE_RISK_AUTO_ROTATE`（`1/true/yes/on` 为开，其余非空为关；config 显式值优先）。
+- 关掉：`providers.zcode.riskAutoRotate: false`，或 `ZCODE_RISK_AUTO_ROTATE=0`。
+- 阈值（默认＋环境变量覆盖）：冷却基数 900s（`ZCODE_RISK_COOLDOWN_BASE[_S]`）、封顶 86400s（`ZCODE_RISK_COOLDOWN_MAX[_S]`）、门限 4（`ZCODE_RISK_BAN_STRIKES`）、衰减 604800s=7天（`ZCODE_RISK_DECAY[_S]`）；冷却公式 `min(base*2^(strikes-1), cap)`。
+- 本仓为单 JWT 直透、无账号池：只换本 JWT 的指纹，不做换号/轮询/claim/激活上报。
 
 求解器是单进程 Node（`captcha-node/solver.js`，stdout `VERIFY_PARAM=` 行回传），退出码含义：
 
@@ -76,7 +85,7 @@ pnpm decrypt:zcode   # 解密本机 credentials.json，只打印脱敏摘要（�
 | `ZCODE_NODE_PATH` | 指定跑 solver.js 的 node 二进制（默认当前 `process.execPath`） |
 | `CAPTCHA_STALL_MS` | 失速判定毫秒数（默认 6000；网络慢/CPU 弱可调大） |
 
-预解池为 FIFO + 95s TTL（上游实际约 2min，提前淘汰），求解失败永不抛错、按空值走现有重试路径。
+预解池为 FIFO + 95s TTL（上游实际约 2min，提前淘汰），求解失败永不抛错、按空值走现有重试路径。池水位 MIN 2 / MAX 10（MIN 由 3 收敛到 2，减少后台补货刷验证）。429 缺省等待 30s（仍尊重 `Retry-After`，采信上限 120s）。
 
 ## scripts/* 用途表
 

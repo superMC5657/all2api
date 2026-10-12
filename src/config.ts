@@ -19,6 +19,11 @@ export interface ZCodeProviderConfig {
   appVersion?: string;
   /** 一号一台设备指纹持久化文件，默认 ~/.zcode/v2/all2api-device.json */
   deviceFile?: string;
+  /**
+   * 3012 将判 DISABLED 时是否先自动轮换设备指纹（默认 true）。
+   * 环境变量 ZCODE_RISK_AUTO_ROTATE 同效（1/true/yes/on 为开），config 显式值优先于环境变量。
+   */
+  riskAutoRotate?: boolean;
 }
 
 export interface QoderProviderConfig {
@@ -393,6 +398,8 @@ const DEFAULTS: All2ApiConfig = {
       jwt: "",
       // 空=跟随本地安装（注册表>exe>runtime）；显式填写才覆盖探测
       appVersion: "",
+      // 3012 将判 DISABLED 时先自动轮换设备指纹（默认开；ZCODE_RISK_AUTO_ROTATE=0/false/no/off 可关）
+      riskAutoRotate: true,
       // 2026-09-26 Start Plan JWT 通道：Anthropic/OpenAI 双协议统一走
       // https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages + Bearer JWT，
       // 不再依赖 open.bigmodel.cn / api.z.ai 按量端点。
@@ -502,6 +509,14 @@ function resolveTraeDataDir(file: TraeProviderConfig | undefined): string {
   return file?.dataDir?.trim() || file?.authDir?.trim() || "";
 }
 
+/** zcode 风控指纹轮换开关：config 显式值 > ZCODE_RISK_AUTO_ROTATE > 默认 true。 */
+function resolveZCodeRiskAutoRotate(fileValue: unknown, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (typeof fileValue === "boolean") return fileValue;
+  const raw = env["ZCODE_RISK_AUTO_ROTATE"]?.trim().toLowerCase();
+  if (!raw) return true;
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 /**
  * 第二步 resolve：纯函数——env 覆盖应用 + 默认值合并 + models 表规整 +
  * codebuddy region 缺省 + trae dataDir||authDir 归一。不读盘、不写盘、不 exit。
@@ -524,6 +539,7 @@ export function resolveConfig(
         ...DEFAULTS.providers.zcode,
         ...fileProviders?.zcode,
         models: normalizeModels(fileProviders?.zcode?.models, DEFAULTS.providers.zcode.models),
+        riskAutoRotate: resolveZCodeRiskAutoRotate(fileProviders?.zcode?.riskAutoRotate, env),
       },
       qoder: {
         ...DEFAULTS.providers.qoder,

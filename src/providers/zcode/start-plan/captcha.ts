@@ -9,7 +9,7 @@
  * - 求解器：默认 Node Runner（spawn solver.js，argv 传 scene/region/prefix，
  *   解析 stdout 的 VERIFY_PARAM= 行，超时杀进程）。setCaptchaSolver 可注入
  *   自定义 solver（测试/二期替换）；传 null 恢复默认 Node Runner。
- * - 预解池：FIFO + TTL 95s + MIN 3 / MAX 10 + 命中即后台补货
+ * - 预解池：FIFO + TTL 95s + MIN 2 / MAX 10 + 命中即后台补货
  *  （fire-and-forget）。
  * - 首请求池空时同步求解一次（等一次求解完成，超时/失败则返回 null，
  *   调用方按空值继续走现有重试路径）。本模块永不抛错。
@@ -48,8 +48,9 @@ export function setCaptchaSolver(solver: CaptchaSolver | null): void {
 }
 
 // ── 预解池参数（对齐 Python app/captcha.py + settings.py）─────────────────────
-// POOL_MIN 3 / POOL_MAX 10 / TOKEN_TTL 95s（上游实际 ~2min，提前淘汰）。
-const POOL_MIN = 3;
+// POOL_MIN 2 / POOL_MAX 10 / TOKEN_TTL 95s（上游实际 ~2min，提前淘汰）。
+// POOL_MIN 由 3 收敛到 2：减少后台补货刷验证（防封），其余 TTL/MAX/超时不动。
+const POOL_MIN = 2;
 const POOL_MAX = 10;
 const TOKEN_TTL_MS = 95_000;
 // 单次求解超时（对齐 Python ZCODE_CAPTCHA_TIMEOUT 默认 40s；solver 内部

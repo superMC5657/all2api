@@ -231,3 +231,17 @@ export function profileForJwt(sub: string | null, deviceFile: string): DevicePro
   saveStore(deviceFile, store);
   return created;
 }
+
+/**
+ * 风控轮换：给该 JWT sub 换一份全新档案（新 SKU + 新 UUID deviceMid + 落盘）。
+ * sub 为空时轮换匿名槽位。调用方在 3012 将判 DISABLED 且开关开时先调此函数
+ * 再抛错（合入 dengyie 2.6.5～2.6.8 防封思路的本仓适配：只换本 JWT 的指纹，
+ * 不做账号池/轮询/激活上报）。
+ */
+export function rotateProfileForJwt(sub: string | null, deviceFile: string): DeviceProfile {
+  const store = loadStore(deviceFile);
+  const created = randomProfile();
+  store[sub || ANONYMOUS_KEY] = created;
+  saveStore(deviceFile, store);
+  return created;
+}

@@ -15,9 +15,10 @@
  * 错误语义（单账号，无换号；抛错带 upstream status+body）见 agent.dispatchStartPlan：
  *  - 验证码挑战：换码重试最多 3 次
  *  - 402/额度关键词 → EXHAUSTED，直接抛 402
- *  - 429：按 Retry-After（封顶 120s）原地重试最多 5 次
+ *  - 429：按 Retry-After（封顶 120s，缺省 30s）原地重试最多 5 次
  *  - 401/403（非验证码）→ INVALID，直接抛
- *  - 405/3012 → DISABLED（风控），直接抛
+ *  - 405/3012 → strikes+冷却+衰减（默认 4 strikes 才 DISABLED，否则 429 COOLING；
+ *    将判 DISABLED 且 riskAutoRotate 开时先轮换指纹再抛；成功一次即清零）
  *  - 5xx：重试 3 次（间隔 5s）
  *  - 其他 4xx：原样回传
  */
@@ -147,6 +148,7 @@ export class ZCodeProvider implements ProviderAdapter {
   private readonly deviceFile: string;
   private readonly timeoutMs: number;
   private readonly modelList: string[];
+  private readonly riskAutoRotate: boolean | undefined;
 
   constructor(config: ZCodeProviderConfig, timeoutMs: number) {
     // config.jwt 非空则视为显式 JWT，否则读本机 `zcode login` 的 zcodeJwt
@@ -162,6 +164,8 @@ export class ZCodeProvider implements ProviderAdapter {
     this.deviceFile = resolveStartPlanDeviceFile(config.deviceFile);
     this.timeoutMs = timeoutMs;
     this.modelList = config.models;
+    // 风控指纹轮换开关：config.riskAutoRotate（resolveConfig 已叠加 env/默认归一；直传构造时 undefined 则由 agent 按 env/默认解析）
+    this.riskAutoRotate = config.riskAutoRotate;
   }
 
   async models(): Promise<string[]> {
@@ -252,6 +256,7 @@ export class ZCodeProvider implements ProviderAdapter {
       appVersion: this.appVersion,
       deviceFile: this.deviceFile,
       timeoutMs: this.timeoutMs,
+      riskAutoRotate: this.riskAutoRotate,
     });
   }
 }

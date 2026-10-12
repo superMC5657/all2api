@@ -18,9 +18,11 @@
       // JWT 优先级：此 jwt 非空即优先；留空自动读本机 `zcode login` 的 ~/.zcode/v2/credentials.json。
       // "jwt": "",
       // appVersion 可选，不填跟随本地安装；只有需要锁版本才填。
-      // "appVersion": "3.14.3",
+      // "appVersion": "3.14.4",
       // 一号一台设备指纹持久化文件（按 JWT sub 区分）。缺省 ~/.zcode/v2/all2api-device.json，支持 ~ 前缀。
       // "deviceFile": "~/.zcode/v2/all2api-device.json",
+      // 3012 将判 DISABLED 时先自动轮换设备指纹（默认开；关：false 或 ZCODE_RISK_AUTO_ROTATE=0）。
+      // "riskAutoRotate": true,
       // 仅展示（/v1/models）+ 兜底，实际可用以网关/套餐为准。
       "models": ["glm-5.3-flash", "glm-5.3-flashx"]
     },

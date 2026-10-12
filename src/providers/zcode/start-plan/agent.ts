@@ -69,10 +69,17 @@ import {
   RISK_CONTROL_HTTP_STATUSES,
   RISK_CONTROL_MARKERS,
   X_ZCODE_AGENT,
+  resolveRiskAutoRotate,
+  resolveRiskBanStrikes,
   userAgent,
 } from "./constants.js";
 import type { DeviceProfile } from "./fingerprint.js";
-import { profileForJwt, resolveDeviceFile as resolveDeviceFileImpl } from "./fingerprint.js";
+import {
+  profileForJwt,
+  resolveDeviceFile as resolveDeviceFileImpl,
+  rotateProfileForJwt,
+} from "./fingerprint.js";
+import { clearRisk, recordRiskStrike, riskKey } from "./risk.js";
 import { getVerifyParam } from "./captcha.js";
 import { ProviderError, toUpstreamResult } from "../../types.js";
 import { upstreamError } from "../../base.js";
@@ -142,7 +149,7 @@ export function buildTraceHeaders(): Record<string, string> {
 
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 
-/** 从任意文本里提取首个 x.y.z（"3.14.3.7762" 取 "3.14.3"；"ZCode 3.14.3" 取 "3.14.3"）。 */
+/** 从任意文本里提取首个 x.y.z（"3.14.4.7762" 取 "3.14.4"；"ZCode 3.14.4" 取 "3.14.4"）。 */
 function pickVersion(text: string): string | null {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(text ?? "");
   return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
@@ -171,7 +178,7 @@ function maxVersion(candidates: string[]): string | null {
   return best ? bestRaw : null;
 }
 
-/** 注册表：卸载项里 DisplayVersion 优先、无则从 DisplayName 取（实机为 "ZCode 3.14.3"）。仅 win32。 */
+/** 注册表：卸载项里 DisplayVersion 优先、无则从 DisplayName 取（实机为 "ZCode 3.14.4"）。仅 win32。 */
 function versionFromRegistry(): string | null {
   if (process.platform !== "win32") return null;
   const found: string[] = [];
@@ -523,6 +530,11 @@ export interface StartPlanForwardOptions {
   appVersion: string;
   deviceFile: string;
   timeoutMs: number;
+  /**
+   * 3012 将判 DISABLED 时是否先自动轮换指纹（默认 true）。
+   * 未传时走 ZCODE_RISK_AUTO_ROTATE 环境变量（1/true/yes/on 为开）> 默认 true。
+   */
+  riskAutoRotate?: boolean;
 }
 
 /**
@@ -540,12 +552,14 @@ export function resolveStartPlanDeviceFile(configured?: string): string {
 
 /**
  * 单账号调度：成功或 4xx 回传时返回 UpstreamResult，其余按错误语义抛 ProviderError。
- * 语义与原 client.ts dispatchAnthropic 逐行一致：
+ * 语义与原 client.ts dispatchAnthropic 逐行一致（3012 除外，见下）：
  *  - 验证码挑战：换码重试最多 3 次
  *  - 402/额度关键词 → EXHAUSTED，直接抛 402
- *  - 429：按 Retry-After（封顶 120s）原地重试最多 5 次
+ *  - 429：按 Retry-After（封顶 120s，缺省等待 30s）原地重试最多 5 次
  *  - 401/403（非验证码）→ INVALID，直接抛
- *  - 405/3012 → DISABLED（风控），直接抛
+ *  - 405/3012 → strikes+冷却+衰减：strikes>=门限（默认 4，7 天衰减）才 DISABLED，
+ *    否则抛 429 COOLING（附 Retry-After=cooling 秒数）；将判 DISABLED 且轮换
+ *    开关开时先 rotateProfileForJwt + warn 再抛；messages 成功一次即清零
  *  - 5xx：重试 3 次（间隔 5s）
  *  - 其他 4xx：原样回传
  */
@@ -554,7 +568,9 @@ export async function dispatchStartPlan(
   opts: StartPlanForwardOptions,
 ): Promise<import("../../types.js").UpstreamResult> {
   const { jwt, appVersion, deviceFile, timeoutMs } = opts;
-  const profile = profileForJwt(jwtUserId(jwt), deviceFile);
+  const sub = jwtUserId(jwt);
+  const key = riskKey(sub);
+  const profile = profileForJwt(sub, deviceFile);
   let verifyParam: string | null = null;
   let verifyRegion: string | null = null;
   let captchaRetries = 0;
@@ -592,7 +608,11 @@ export async function dispatchStartPlan(
       );
     }
 
-    if (res.status < 400) return toUpstreamResult(res);
+    if (res.status < 400) {
+      // messages 成功一次即清零该 JWT sub 的风控 strikes（参考上游 gateway 成功分支）
+      clearRisk(key);
+      return toUpstreamResult(res);
+    }
 
     const text = await res.text();
 
@@ -611,12 +631,36 @@ export async function dispatchStartPlan(
       continue;
     }
 
-    // 风控（3012/unusual activity / 405）→ DISABLED，直接抛
+    // 风控（3012/unusual activity / 405）→ strikes+冷却+衰减：
+    // strikes>=门限才 DISABLED，否则抛 429 COOLING（Retry-After=cooling 秒）。
     if (isRiskControl(res.status, text)) {
-      throw new ProviderError(
-        `zcode: DISABLED — upstream risk control (status ${res.status}): ${text.slice(0, 500)}`,
-        res.status,
+      const { strikes, coolingS } = recordRiskStrike(key);
+      const banStrikes = resolveRiskBanStrikes();
+      if (strikes >= banStrikes) {
+        if (resolveRiskAutoRotate(opts.riskAutoRotate)) {
+          try {
+            rotateProfileForJwt(sub, deviceFile);
+            console.warn(
+              `[zcode] 3012 风控 strikes=${strikes}/${banStrikes}，已自动轮换设备指纹（deviceFile 持久化），本次仍抛 DISABLED`,
+            );
+          } catch {
+            // 轮换失败不放大原风控错误，仅告警
+            console.warn(
+              `[zcode] 3012 风控 strikes=${strikes}/${banStrikes}，设备指纹自动轮换失败（本次仍抛 DISABLED）`,
+            );
+          }
+        }
+        throw new ProviderError(
+          `zcode: DISABLED — upstream risk control (status ${res.status}, strikes ${strikes}/${banStrikes}): ${text.slice(0, 500)}`,
+          res.status,
+        );
+      }
+      const err = new ProviderError(
+        `zcode: COOLING — upstream risk control (status ${res.status}, strike ${strikes}/${banStrikes}, retry after ${coolingS}s): ${text.slice(0, 500)}`,
+        429,
       );
+      (err as unknown as { retryAfter?: number }).retryAfter = coolingS;
+      throw err;
     }
 
     // 402/额度关键词 → EXHAUSTED，直接抛 402
@@ -635,7 +679,7 @@ export async function dispatchStartPlan(
       );
     }
 
-    // 429：按 Retry-After（封顶 120s）原地重试最多 5 次
+    // 429：按 Retry-After（封顶 120s，缺省 30s）原地重试最多 5 次
     if (res.status === 429) {
       if (retries429 < MAX_429_RETRIES) {
         retries429 += 1;
